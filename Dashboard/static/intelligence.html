@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>率土 · 赛季档案</title>
+  <link rel="stylesheet" href="/intelligence.css">
+  <link rel="stylesheet" href="/harvest.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a href="/" class="brand"><span class="brand-mark" aria-hidden="true">土</span><span>率土战场</span></a>
+      <nav class="site-links" aria-label="主导航">
+        <a href="/">情报看板</a>
+        <a href="/battlefield">实时地图</a>
+        <a href="/archive" aria-current="page">赛季档案</a>
+      </nav>
+      <div class="session-info"><span id="archiveStatus" class="connection-label">连接中</span></div>
+    </div>
+  </header>
+  <main class="shell page">
+    <div class="page-heading">
+      <div><h1>赛季档案</h1><p id="profileLabel">正在读取档案…</p></div>
+      <button id="profileButton" type="button">档案设置</button>
+    </div>
+    <section class="metrics" aria-label="采集统计">
+      <div><span>人物身份条目</span><strong id="playersCount">—</strong></div>
+      <div><span>累计见到的部队</span><strong id="teamsCount">—</strong></div>
+      <div><span>待关联的阵容</span><strong id="formationsCount">—</strong></div>
+      <div><span>已归档战报</span><strong id="reportsCount">—</strong></div>
+      <div><span>行军样本</span><strong id="marchesCount">—</strong></div>
+      <div><span>持久观测记录</span><strong id="eventsCount">—</strong></div>
+    </section>
+
+    <section class="records" aria-labelledby="archiveTitle">
+      <div class="records-heading"><h2 id="archiveTitle">档案记录</h2></div>
+      <nav id="archiveViews" class="record-tabs" aria-label="档案分类">
+        <button type="button" data-kind="teams" class="active" aria-pressed="true">队伍与阵容</button>
+        <button type="button" data-kind="players" aria-pressed="false">同盟成员</button>
+        <button type="button" data-kind="marches" aria-pressed="false">行军与速度</button>
+        <button type="button" data-kind="battles" aria-pressed="false">战报索引</button>
+        <button type="button" data-kind="events" aria-pressed="false">战场历史</button>
+        <button type="button" data-kind="definitions" aria-pressed="false">字段管理</button>
+      </nav>
+      <div class="toolbar">
+        <label>同盟<select id="unionFilter" aria-label="筛选同盟"><option value="">全部已观测同盟</option></select></label>
+        <label class="search">搜索<input id="archiveSearch" type="search" placeholder="玩家、武将、战法或队伍编号" aria-label="搜索情报"></label>
+        <button id="refreshButton" type="button">刷新</button><button id="exportButton" type="button">导出本页</button>
+        <span id="pageInfo"></span>
+        <button id="previousPage" type="button" aria-label="上一页">←</button><button id="nextPage" type="button" aria-label="下一页">→</button>
+      </div>
+      <p id="tabHelp" class="help"></p>
+      <div id="dataTable" class="table-container" aria-live="polite" role="region" aria-label="档案结果" tabindex="0"></div>
+    </section>
+
+    <details class="data-controls">
+      <summary>历史战报采集</summary>
+      <div class="data-control-body">
+        <p id="reportLoading">正在读取历史采集进度…</p>
+        <p id="coverage"></p>
+        <div class="harvest" aria-label="历史战报采集控制">
+          <div><span id="harvestStatus" role="status">正在读取状态…</span><small id="harvestProgress"></small></div>
+          <label>最多<input id="harvestPages" type="number" min="1" max="1000" value="100" aria-label="本轮最多读取页数">页</label>
+          <button id="harvestStart" type="button">从最新开始</button>
+          <button id="harvestResume" type="button" disabled>断点续采</button>
+          <button id="harvestPause" type="button" disabled>暂停</button>
+        </div>
+      </div>
+    </details>
+  </main>
+  <footer class="shell"><span id="storagePath"></span><span id="updateTime"></span></footer>
+  <dialog id="teamDialog" aria-labelledby="teamTitle">
+    <div class="dialog-heading"><h2 id="teamTitle">队伍记录</h2><button id="closeTeam" aria-label="关闭队伍详情">×</button></div>
+    <div id="teamBody"></div>
+  </dialog>
+  <dialog id="profileDialog" aria-labelledby="profileTitle">
+    <div class="dialog-heading"><h2 id="profileTitle">账号与赛季档案</h2><button id="closeProfile" aria-label="关闭档案设置">×</button></div>
+    <form id="profileForm">
+      <p class="help">当前采集已绑定此角色、本盟和赛季，可修改显示名称。更换绑定前需停止采集并核对新游戏环境。</p>
+      <label>区服<input name="server" readonly required></label>
+      <label>赛季分档标识<input name="season" readonly required></label>
+      <label>赛季显示名称<input name="season_label" required></label>
+      <label>角色档案编号<input name="account_role_id" readonly required></label>
+      <label>角色名<input name="account_name" required></label>
+      <label>本盟编号<input name="union_id" readonly required></label>
+      <label>本盟名称<input name="union_name" required></label>
+      <button type="submit" class="primary">保存档案名称</button>
+      <p id="profileResult"></p>
+    </form>
+  </dialog>
+  <script src="/intelligence.js"></script>
+</body>
+</html>

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>率土 · 同盟战场情报</title>
+  <link rel="stylesheet" href="/intelligence.css">
+  <link rel="stylesheet" href="/warroom.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a href="/" class="brand"><span class="brand-mark" aria-hidden="true">土</span><span>率土战场</span></a>
+      <nav class="site-links" aria-label="主导航">
+        <a href="/" aria-current="page">情报看板</a>
+        <a href="/battlefield">实时地图</a>
+        <a href="/archive">赛季档案</a>
+      </nav>
+      <div class="session-info"><span id="identity"></span><span id="connectionStatus" class="connection-label">连接中</span></div>
+    </div>
+  </header>
+
+  <main class="shell page">
+    <div class="page-heading">
+      <div><h1>同盟战场情报</h1><p>按玩家、队号或战役查阅本赛季的行军和战报。</p></div>
+      <span id="refreshedAt" class="update-time"></span>
+    </div>
+    <section class="metrics" aria-label="当前筛选统计">
+      <div><span>已观测名字</span><strong id="namesCount">—</strong></div>
+      <div><span>有关联 / 已见行军队号</span><strong id="armyCount">—</strong><small id="armyCoverageNote"></small></div>
+      <div><span>行军记录</span><strong id="marchCount">—</strong></div>
+      <div><span>相关战报</span><strong id="battleCount">—</strong></div>
+      <div><span>匹配到战报的行军</span><strong id="chainCount">—</strong></div>
+      <div><span>已保存战报全文</span><strong id="bodyCount">—</strong></div>
+    </section>
+
+    <section class="records" aria-labelledby="recordsTitle">
+      <div class="records-heading"><h2 id="recordsTitle">情报记录</h2><button id="exportView" type="button">导出到本机</button></div>
+      <nav id="intelViews" class="record-tabs" aria-label="战场情报分类">
+        <button type="button" data-view="personnel" class="active" aria-pressed="true">玩家与队伍</button>
+        <button type="button" data-view="operations" aria-pressed="false">行军链路</button>
+        <button type="button" data-view="encounters" aria-pressed="false">交战记录</button>
+        <button type="button" data-view="matchups" aria-pressed="false">对战统计</button>
+        <button type="button" data-view="main-matchups" aria-pressed="false">主力对阵</button>
+        <button type="button" data-view="combat-analysis" aria-pressed="false">武将与战法</button>
+      </nav>
+
+      <form id="queryForm" class="query-panel">
+        <div class="quick-filters">
+          <label>阵营<select id="relation"><option value="enemy">已确认敌盟</option><option value="ally">本盟</option><option value="all">全部已观测同盟</option></select></label>
+          <label>搜索<input id="intelSearch" type="search" placeholder="玩家、武将或战报编号"></label>
+          <label>官方战役<select id="campaign"><option value="">全赛季</option></select></label>
+          <button type="submit" class="primary">查询</button>
+        </div>
+        <details class="advanced-filters">
+          <summary>高级筛选<span id="advancedFilterCount" class="filter-count"></span></summary>
+          <div class="advanced-fields">
+            <label>指定同盟<select id="intelUnion"><option value="">按阵营查询</option></select></label>
+            <label>精确队号<input id="intelArmy" inputmode="numeric" placeholder="选填"></label>
+            <label>坐标范围<input id="region" placeholder="最小X,最小Y,最大X,最大Y"></label>
+            <label>开始时间<input id="fromTime" type="datetime-local"></label>
+            <label>结束时间<input id="toTime" type="datetime-local"></label>
+          </div>
+          <div class="filter-actions"><button id="allCampaigns" type="button">清除查询范围</button></div>
+        </details>
+      </form>
+      <p id="exportStatus" class="inline-status" role="status"></p>
+      <div class="results-heading">
+        <p id="viewHelp" class="help"></p>
+        <div class="pagination"><span id="resultPage"></span><button id="prevResult" type="button" aria-label="上一页">←</button><button id="nextResult" type="button" aria-label="下一页">→</button></div>
+      </div>
+      <p id="queryStatus" class="inline-status" role="status"></p>
+      <p id="mainScopeControls" hidden><label>主力样本范围
+        <select id="mainScope"><option value="both">双方都是主力</option><option value="either">至少一方是主力</option></select>
+      </label></p>
+      <p id="analysisControls" hidden>
+        <label>分析对象 <select id="analysisDimension"><option value="skill">战法</option><option value="hero">武将</option></select></label>
+        <label>统计一方 <select id="analysisPerspective"><option value="own">本盟</option><option value="enemy">对方</option></select></label>
+        <button id="clearAnalysisSubject" type="button" hidden>返回全部</button>
+      </p>
+      <details id="mainCounterStats" hidden>
+        <summary>克制战法实战样本</summary>
+        <div id="mainCounterTable"></div>
+      </details>
+      <div id="intelTable" class="table-container" aria-live="polite" role="region" aria-label="情报结果" tabindex="0"></div>
+    </section>
+
+    <details class="data-controls">
+      <summary>数据来源与采集</summary>
+      <div class="data-control-body">
+        <p id="memberSources" role="status">读取成员来源…</p>
+        <p id="scopeNote">当前展示客户端已接收的资料。筛选只影响查询范围。</p>
+        <p id="readerStatus" role="status">正在读取战报补全状态…</p>
+        <div class="filter-actions"><button id="resumeReader" type="button">开启持续补全</button><button id="pauseReader" type="button" disabled>暂停补全</button></div>
+      </div>
+    </details>
+  </main>
+
+  <footer class="shell"><span>本机档案 · F:\STLab</span></footer>
+  <dialog id="intelDialog" aria-labelledby="dialogTitle">
+    <div class="dialog-heading"><h2 id="dialogTitle">详情</h2><button id="closeIntelDialog" aria-label="关闭详情">×</button></div>
+    <div id="dialogBody"></div>
+  </dialog>
+  <script src="/warroom.js"></script>
+</body>
+</html>

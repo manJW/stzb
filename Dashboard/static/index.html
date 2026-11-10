@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>率土 · 战场观察</title><link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">土</span><div><h1>战场观察</h1><span class="brand-caption">率土之滨 · 本机看板</span></div></div>
+    <div class="identity"><span id="ownName">等待读取角色</span><small id="ownUnion"></small></div>
+    <div class="connection"><span id="liveDot" class="dot"></span><div><strong id="connectionText">连接中</strong><small id="connectionAge">等待游戏数据</small></div></div>
+    <a href="/" class="button quiet">情报看板</a><button id="settingsButton" class="button quiet">设置与校准</button>
+  </header>
+  <div id="notice" class="notice">
+    <span id="noticeText" role="status">正在连接本机数据服务…</span>
+    <button id="noticeAlerts" class="notice-alert-action" type="button" aria-controls="watchPanel" hidden>查看来袭</button>
+  </div>
+  <section class="commandbar" aria-label="部队筛选">
+    <div class="section-title">部队 <strong id="freshCount">0</strong><span id="observedCount"></span></div>
+    <nav class="tabs" aria-label="关系筛选"><button class="active" data-filter="all">全部</button><button data-filter="self">自己</button><button data-filter="ally">同盟</button><button data-filter="enemy">敌方</button><button data-filter="unknown">未确认</button></nav>
+    <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="搜索玩家、同盟或部队" aria-label="搜索部队"></label>
+    <label class="history-toggle"><input id="showHistory" type="checkbox">历史观测</label>
+  </section>
+  <main class="workspace">
+    <aside id="rosterPane" class="roster-pane" aria-label="部队列表" hidden>
+      <div class="pane-heading"><span>观测部队</span><span id="listCount">0 支</span></div>
+      <button id="rosterSelection" class="roster-selection" type="button" aria-controls="armyDetails" hidden>
+        <span><strong id="selectedPlayer"></strong><small id="selectedNumber"></small></span>
+        <span><small>已选部队</small><span id="selectedStatus"></span></span>
+      </button>
+      <div id="roster" class="roster"><div id="rosterRows"></div><div id="rosterEmpty" class="empty">等待地图中的部队数据</div></div>
+      <div class="roster-footer">按玩家名、队号排列 · 仅覆盖已收到的观测</div>
+    </aside>
+    <aside id="inspector" class="inspector" aria-label="战场侧栏">
+      <div class="inspector-bar">
+        <div class="inspector-views" role="group" aria-label="侧栏视图">
+          <button id="watchTab" type="button" aria-controls="watchPanel" aria-pressed="true">来袭预警<span id="watchBadge" class="watch-badge" hidden></span></button>
+          <button id="armyTab" type="button" aria-controls="armyDetails" aria-pressed="false" disabled>部队详情</button>
+        </div>
+        <button id="closeInspector" class="inspector-close" type="button" aria-label="关闭侧栏">×</button>
+      </div>
+      <section id="watchPanel" class="watch-section" aria-labelledby="watchTitle">
+        <div class="watch-heading"><div><h2 id="watchTitle">来袭预警</h2><p id="watchStatus">等待地图数据</p></div><button id="editTarget" class="text-button" type="button">观察设置</button></div>
+        <div class="watch-campaign"><label for="mapCampaign">官方战役</label><select id="mapCampaign"><option value="">全部战场</option></select></div>
+        <label id="watchTargetControl" class="watch-target-control" hidden>
+          <span>来袭目标</span><select id="alertTarget" aria-label="选择来袭目标"><option value="">全部目标</option></select>
+        </label>
+        <section id="targetIntel" class="target-intel" aria-label="选中地块" hidden><p id="targetIdentity"></p><button id="targetLocate" class="text-button game-locate" type="button" hidden>游戏内定位</button></section>
+        <section id="garrisonWebStatus" class="garrison-web-status" aria-label="网页驻守任务" hidden>
+          <p id="garrisonWebMessage" role="status"></p>
+          <button id="cancelWebGarrison" class="text-button" type="button" hidden>停止派队</button>
+        </section>
+        <section id="watchMain" class="watch-main" aria-labelledby="watchMainTitle" hidden>
+          <h3 id="watchMainTitle" title="三将均至少 40 级，每将的 3 个战法均有记录">主力 <span id="watchMainCount"></span></h3>
+          <div id="mainEntries"></div>
+        </section>
+        <section id="watchUnknown" class="watch-unknown" aria-labelledby="watchUnknownTitle" hidden>
+          <h3 id="watchUnknownTitle" title="兵力或阵容证据不足，或历史记录存在冲突">未知 <span id="watchUnknownCount"></span></h3>
+          <div id="watchEntries"></div>
+        </section>
+        <details id="watchSpartan" class="watch-candidates watch-low" open hidden>
+          <summary title="地图明确显示 1 至 2 将，或有战报支持战前兵力不超过 300">斯巴达 <span id="watchSpartanCount"></span></summary>
+          <div id="spartanEntries"></div>
+        </details>
+        <details id="watchCandidates" class="watch-candidates" hidden>
+          <summary>待核对的敌情 <span id="watchCandidateCount"></span></summary>
+          <div id="candidateEntries"></div>
+        </details>
+        <div class="inspector-footer"><span id="messageCount">0 条消息</span><span id="calibrationCount">状态未校准</span></div>
+      </section>
+      <section id="armyDetails" class="army-details" aria-label="部队详情" hidden></section>
+    </aside>
+    <section class="map-pane" aria-label="战场坐标示意图">
+      <div class="map-top"><div><select id="watchSelect" aria-label="切换分析标记"></select><button id="focusTarget" class="target-link">当前视野<span>↗</span></button><button id="compactWatchStatus" class="compact-watch" type="button" aria-controls="inspector" aria-expanded="false">来袭预警</button></div><div class="map-actions"><button id="fitView" title="适配观测范围" aria-label="适配观测范围">⌖</button><button id="zoomIn" title="放大" aria-label="放大">＋</button><button id="zoomOut" title="缩小" aria-label="缩小">−</button></div></div>
+      <canvas id="map" aria-label="部队位置、起点与目标坐标，支持拖动和缩放"></canvas>
+      <div class="map-empty" id="mapEmpty"><strong>等待新的地图观测</strong><span>在游戏中拖动地图或查看部队详情</span></div>
+      <div class="map-legend"><span><i class="legend-point self"></i>本盟</span><span><i class="legend-point enemy"></i>敌方</span><span><i class="legend-fort"></i>要塞</span><span><i class="legend-fort building"></i>建设中</span><span class="map-scope">红箭头 本盟来袭 · 棕箭头 其他敌方进攻</span></div>
+      <div class="map-bottom"><span id="mapCoordinates">X — · Y —</span><span>点地块看敌袭 · 点部队看详情</span></div>
+    </section>
+  </main>
+  <dialog id="quickGuardDialog">
+    <div class="dialog-header"><div><span class="eyebrow">本方部队</span><h2>快捷驻守</h2></div><button id="closeQuickGuard" type="button" class="icon-button" aria-label="关闭快捷驻守">×</button></div>
+    <section class="settings-section">
+      <p id="quickGuardTarget"></p>
+      <label>选择待命队伍<select id="quickGuardTeam"></select></label>
+      <p id="quickGuardHelp" class="help" role="status"></p>
+      <p id="quickGuardPreviewResult" class="garrison-web-status" role="status" hidden></p>
+      <p class="help"><label class="guard-option"><input id="quickGuardRecruit" type="checkbox"> 沿用游戏已勾选的返程征兵（默认仅驻守）</label></p>
+      <button id="previewQuickGuard" class="button quiet" type="button" disabled>驻守预览</button>
+      <button id="submitQuickGuard" class="button" type="button" disabled>核对后驻守</button>
+    </section>
+  </dialog>
+  <dialog id="settingsDialog">
+    <div class="dialog-header"><div><span class="eyebrow">本地设置</span><h2>设置与观测记录</h2></div><button id="closeSettings" aria-label="关闭设置" class="icon-button">×</button></div>
+    <section class="settings-section"><h3>本方身份 <span class="verified" id="settingsIdentityCheck">待核对</span></h3><p id="settingsIdentity"></p></section>
+    <section class="settings-section" id="garrisonTrial">
+      <h3>驻守实盘试跑</h3>
+      <p class="help">从这里启动的全域试跑使用已绑定的 200 兵测试队。主力来袭卡片里的「快捷驻守」可选择其他自有待命队。</p>
+      <p id="garrisonTrialStatus" role="status">正在读取试跑状态</p>
+      <p class="help" id="garrisonTrialTimeline"></p>
+      <p class="help" id="garrisonTrialOutcome" hidden><span id="garrisonTrialCause"></span> <a id="garrisonTrialReport"></a></p>
+      <button id="armGarrisonTrial" class="button" type="button" disabled>启动一次自动驻守</button>
+      <button id="cancelGarrisonTrial" class="button quiet" type="button" disabled>停止等待</button>
+    </section>
+    <form id="targetForm" class="settings-section"><h3>分析坐标标记</h3><p class="help">标记只方便定位，不限制采集或全域来袭判断。</p><label>名称<input id="targetName" maxlength="30" required></label><div class="two-fields"><label>X 坐标<input id="targetX" type="number" min="1" max="9999" required></label><label>Y 坐标<input id="targetY" type="number" min="1" max="9999" required></label></div><button class="button" type="submit">保存当前据点</button> <button id="addTarget" class="button quiet" type="button">添加为新据点</button></form>
+    <form id="unionForm" class="settings-section"><h3>同盟关系</h3><p class="help">其他同盟保持未确认。只标记你已在游戏中核实的关系。</p><label>同盟<select id="unionSelect" required></select></label><label>关系<select id="unionRelation"><option value="unknown">未确认</option><option value="enemy">确认敌对</option><option value="friendly">确认友好</option></select></label><button class="button" type="submit">保存关系</button></form>
+    <section class="settings-section"><h3>来袭提醒启用条件</h3><ul class="checklist" id="alertChecklist"></ul><p class="help">状态校准：先选择一支部队，再与游戏中的部队详情对照。驻守试跑的授权与结果可在上方查看。</p></section>
+    <section class="settings-section"><h3>所有战场 · 自动捕获的变化</h3><p class="help">只记录客户端已收到的观测。“离开当前观测”表示暂时失去观测；状态变化保留原始时间，供后续核对。</p><div id="eventHistory" class="event-history"></div></section>
+  </dialog>
+  <section id="alertPopup" class="alert-popup" aria-label="来袭速览" hidden>
+    <header class="alert-popup-head"><div><span>来袭速览</span><h2 id="alertPopupTitle"></h2></div><button id="closeAlertPopup" class="icon-button" type="button" aria-label="关闭来袭速览">×</button></header>
+    <div id="alertPopupBody" class="alert-popup-body"></div>
+    <footer class="alert-popup-footer"><div>抵达倒计时 <time id="alertPopupCountdown"></time></div><button id="alertPopupLocate" class="text-button game-locate" type="button" hidden>游戏内定位</button><button id="alertPopupDetails" class="text-button" type="button">部队详情 ↗</button></footer>
+  </section>
+  <div id="toast" role="status"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
