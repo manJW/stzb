@@ -2,11 +2,12 @@ import json
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from archive import Archive
+from test_support import Archive
 
 
 def battle(bid=1, timestamp=100, hero=100701, skills=True):
@@ -172,10 +173,11 @@ class ArchiveTests(unittest.TestCase):
         self.archive.ingest(92, [[future]], 401)
         self.observe_troops("2,21;2,32;3,3;")
 
-        result = self.archive.query("army_lineups", army_id="456")
+        with patch('archive.time.time', return_value=300):
+            result = self.archive.query("army_lineups", army_id="456")
         self.assertEqual(result["match"], "name_union_troop_candidate")
         self.assertEqual([row["battle_id"] for row in result["items"]], ["6", "4", "3", "2", "1"])
-        self.assertEqual([t["name"] for t in result["troops"]], ["弓兵", "步兵", "骑兵"])
+        self.assertEqual([t["name"] for t in result["troops"]], ["弩兵", "禁卫", "骑兵"])
 
     def test_defender_troops_are_reversed_and_family_match_is_weaker_than_exact_army(self):
         row = {"battle_id": 1, "time": 100, "wid": 5000600, "defend_name": "player",
@@ -227,16 +229,16 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(hero["field_times"]["skills"], 100)
 
     def own_link_sample(self, bid=1, timestamp=100, hero=100701):
-        (self.folder / "config.json").write_text(json.dumps({"self": {"confirmed": True, "user_id": "71021",
-            "name": self.archive.profile["account_name"], "union_id": "1909"}}), encoding="utf-8")
+        (self.folder / "config.json").write_text(json.dumps({"self": {"confirmed": True, "user_id": "12319",
+            "name": self.archive.profile["account_name"], "union_id": "1009"}}), encoding="utf-8")
         data = battle(bid, timestamp, hero)
-        data.update(attack_name=self.archive.profile["account_name"], attack_unionid=1909, attack_idu="0,11,12,13,0")
+        data.update(attack_name=self.archive.profile["account_name"], attack_unionid=1009, attack_idu="0,11,12,13,0")
         raw = [0] * 33
-        raw[0], raw[1], raw[2], raw[3] = 1, 71021, 5000600, 5000600
+        raw[0], raw[1], raw[2], raw[3] = 1, 12319, 5000600, 5000600
         scene = [None] * 34
-        scene[6] = {"79000213": raw}
+        scene[6] = {"93209063": raw}
         self.archive.ingest(5028, scene, 200)
-        index = [bid, 71021, 0, 79000213, 90, 0, 1, 5000600, 0, 0, f"{hero},100807,100703", "", 0, 0, 0]
+        index = [bid, 12319, 0, 93209063, 90, 0, 1, 5000600, 0, 0, f"{hero},100807,100703", "", 0, 0, 0]
         return data, [1, "Tb_battle_report_attack", index]
 
     def test_own_report_index_links_exact_army_after_report_and_preserves_source(self):
@@ -244,9 +246,9 @@ class ArchiveTests(unittest.TestCase):
         self.archive.ingest(10, [0, [data]], 300)
         unbound = self.current()["team_key"]
         self.archive.ingest(90005, [index], 400)
-        exact = self.archive.query("army_lineups", army_id="79000213")
+        exact = self.archive.query("army_lineups", army_id="93209063")
         self.assertEqual(exact["match"], "exact_army_id")
-        self.assertEqual(exact["items"][0]["data"]["binding_evidence"]["world_uid"], "71021")
+        self.assertEqual(exact["items"][0]["data"]["binding_evidence"]["world_uid"], "12319")
         self.assertEqual(self.archive.summary()["counts"]["bound_teams"], 1)
         self.assertEqual(self.archive.summary()["counts"]["unbound_formations"], 0)
         self.assertEqual(len(self.archive.query("team_history", team_key=unbound)["items"]), 1)
@@ -259,10 +261,10 @@ class ArchiveTests(unittest.TestCase):
         self.archive.ingest(90005, [new_index, old_index], 250)
         self.archive.ingest(10, [0, [newer]], 300)
         self.archive.ingest(10, [0, [older]], 400)
-        current = self.archive.query("army_lineups", army_id="79000213")["items"][0]
+        current = self.archive.query("army_lineups", army_id="93209063")["items"][0]
         self.assertEqual(current["data"]["heroes"][0]["id"], 100841)
         self.assertEqual(current["event_at"], 200)
-        self.assertEqual(len(self.archive.query("team_history", team_key="army:79000213")["items"]), 2)
+        self.assertEqual(len(self.archive.query("team_history", team_key="army:93209063")["items"]), 2)
 
     def test_link_rejects_wrong_owner_hero_coordinate_or_identity(self):
         for field, value in ((1, 999), (7, 5000601), (10, "100841,100807,100703")):

@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from urllib.request import urlopen
@@ -22,10 +23,10 @@ PILLOW = (
     "9dda0788a9932776a75d8bcc020076edc308ce2508b51f6739a45e3158b3fc42",
 )
 MODULES = (
-    "archive.py", "capture_decoder.py", "collector.py", "combat_loadout.py", "defense.py", "defense_model.py",
-    "game_locator.py", "installed_mode.py", "intelligence.py", "lineup_prediction.py",
-    "member_receiver.py", "model.py", "observation_codec.py", "official_campaigns.py", "server.py",
-    "share_protocol.py", "field-definitions.json", "Windows-Ocr.ps1",
+    "archive.py", "reported_archive.py", "collector.py", "combat_loadout.py", "defense.py", "defense_model.py", "lineup_projection.py", "report_priority.py", "union_relations.py",
+    "archive_timeline.py", "game_locator.py", "installed_mode.py", "intelligence.py", "lineup_prediction.py",
+    "member_receiver.py", "model.py", "presence_audit.py", "observation_codec.py", "official_campaigns.py", "server.py",
+    "season_seed.py", "share_protocol.py", "field-definitions.json", "Windows-Ocr.ps1",
 )
 
 
@@ -46,6 +47,8 @@ def stage_payload(folder):
         shutil.copyfile(ROOT / name, dashboard / name)
     shutil.copytree(ROOT / "static", dashboard / "static")
     shutil.copytree(ROOT / "catalog", dashboard / "catalog", ignore=shutil.ignore_patterns("garrison-*.png"))
+    (folder / "Tools").mkdir()
+    shutil.copyfile(ROOT.parent / "Tools" / "Analyze-GameCapture.py", folder / "Tools" / "Analyze-GameCapture.py")
     # The development checkout still has account-specific defaults. An install
     # has a new local profile and must contain only neutral fallback values.
     defaults = (
@@ -78,6 +81,7 @@ def stage_payload(folder):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--include-season-data", action="store_true")
     args = parser.parse_args()
     output = args.output.resolve()
     compiler_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Microsoft.NET" / "Framework64" / "v4.0.30319"
@@ -86,11 +90,15 @@ def main():
         work = Path(temporary)
         folder = work / "payload"
         stage_payload(folder)
+        if args.include_season_data:
+            sys.path.insert(0, str(ROOT))
+            from season_seed import FILENAME, export_seed
+            print(export_seed(ROOT, folder / "Dashboard" / FILENAME), flush=True)
         payload = work / "dashboard.zip"
         with ZipFile(payload, "w", ZIP_DEFLATED, compresslevel=7) as package:
             for file in sorted(folder.rglob("*")):
                 if file.is_file():
-                    package.writestr(file.relative_to(folder).as_posix(), file.read_bytes())
+                    package.write(file, file.relative_to(folder).as_posix())
         built = work / "setup.exe"
         subprocess.run([
             str(compiler_dir / "csc.exe"), "/nologo", "/target:winexe", "/platform:x64", "/optimize+",

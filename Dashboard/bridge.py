@@ -116,12 +116,19 @@ class ReadOnlyBridge:
             raise RuntimeError("战报摘要读取未被接受：" + response[:120])
         return {"command": 10, "body": body, "acknowledged": True}
 
+    def fetch_members(self):
+        # Official UnionData.RequestUnionMember sends command 103 with [].
+        response=self._call('__net_send 103 []')
+        if response!='OK:sent cmd=103':raise RuntimeError('成员名单读取未被接受：'+response[:120])
+        return {'command':103,'body':[],'acknowledged':True}
+
     def fetch_battle_detail(self, battle_id):
         if type(battle_id) is not int or not 0 < battle_id <= 9223372036854775807:
             raise ValueError("战报编号无效")
-        # Body captured from this same client's normal report-detail UI.
-        body = [battle_id, 1, 0]
-        response = self._call("__net_send 6231 " + json.dumps(body, separators=(",", ":")))
-        if response != "OK:sent cmd=6231":
+        # ReportDetailData.RequestReportDetailData uses 11 for full union text;
+        # 6231 is RequestShortDetailData and can return only brief_report.
+        body = [battle_id, 0, 0]
+        response = self._call("__net_send 11 " + json.dumps(body, separators=(",", ":")))
+        if response != "OK:sent cmd=11":
             raise RuntimeError("战报全文读取未被接受：" + response[:120])
-        return {"command": 6231, "body": body, "acknowledged": True}
+        return {"command": 11, "body": body, "acknowledged": True}

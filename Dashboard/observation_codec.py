@@ -2,8 +2,10 @@
 import hashlib
 import json
 import re
+from pathlib import Path
 
 TROOP_NAMES = {0: "空位", 1: "弓兵", 2: "步兵", 3: "骑兵"}
+TROOP_TYPES = json.loads((Path(__file__).with_name('catalog') / 'troop-types.json').read_text(encoding='utf-8'))
 
 
 def number(value, default=0):
@@ -11,6 +13,18 @@ def number(value, default=0):
         return int(value)
     except (ValueError, TypeError, OverflowError):
         return default
+
+
+def map_player_traits(raw):
+    """MapDataCommon player slot 5 is UserForceType; BANDIT is exactly 1.
+
+    An empty alliance, a name or an NPC camp cannot establish this identity.
+    """
+    force = raw[5] if isinstance(raw, list) and len(raw) > 5 and type(raw[5]) is int else None
+    clan = raw[4] if isinstance(raw, list) and len(raw) > 4 and type(raw[4]) is int else 0
+    extra = raw[14] if isinstance(raw, list) and len(raw) > 14 and isinstance(raw[14], list) else []
+    return {'force_type':force, 'is_wanderer':force == 1, 'clan_id':max(0, clan),
+            'clan_name':str(extra[2] or '') if len(extra) > 2 else ''}
 
 
 def packed(value):
@@ -28,6 +42,19 @@ def coord(wid):
 
 def integers(value, separator=","):
     return [number(part) for part in str(value or "").split(separator) if part.strip()]
+
+
+def report_system_npc(battle, side):
+    """NPC guards inherit the landowner's name/role, but not player hero instances."""
+    if number(battle.get(side + 'er_force')) == 1000001:
+        return True
+    world_army = integers(battle.get('world_npc_army'))
+    npc_guard = number(battle.get('npc')) == 1 or bool(world_army and world_army[0] > 0)
+    return side == 'defend' and npc_guard and not any(integers(battle.get('defend_idu')))
+
+
+def report_has_npc(battle):
+    return number(battle.get('npc')) == 1 or any(report_system_npc(battle, side) for side in ('attack', 'defend'))
 
 
 def map_troop_codes(value):
@@ -68,7 +95,7 @@ def troop_families(codes):
 
 
 def describe_troops(codes):
-    return [{"position": position, "code": code, "name": TROOP_NAMES[family]}
+    return [{"position": position, "code": code, "name": TROOP_TYPES.get(str(code), TROOP_NAMES[family])}
             for position, (code, family) in enumerate(zip(codes, troop_families(codes)), 1)]
 
 

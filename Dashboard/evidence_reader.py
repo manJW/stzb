@@ -1,6 +1,12 @@
 """Bounded enrichment of received battle IDs; no ID enumeration or game orders."""
 import threading
 import time
+import json
+
+from intelligence import MAIN_DETAIL_PRIORITY, report_references
+from observation_codec import map_troop_codes, report_troop_codes
+
+URGENT_DETAIL_PRIORITY = 200
 
 
 class ReportEvidenceReader:
@@ -23,7 +29,13 @@ class ReportEvidenceReader:
         self.continuous = False
         self.total_requests = 0
         self.not_before = 0
+        self.budget_cooldown = False
+        self.last_completed = 0
+        self.retry_at = 0
+        self.priority_detail_reads = 0
         self.reason = "等待启用战报补全"
+        self.focus_checked = (None, 0)
+        self.focus_status = None
         with archive.lock, archive.db:
             archive.db.execute("UPDATE report_read_jobs SET state='queued' WHERE profile_id=? AND state IN ('reading','paused')", (self.profile_id,))
             archive.intelligence.seed_alliance_details()
@@ -35,7 +47,8 @@ class ReportEvidenceReader:
         with self.lock:
             result = {"active": self.active, "waiting_response": self.waiting, "requests": self.requests,
                 "max_requests": self.maximum, "reason": self.reason, "profile_temporarily_blocked": self.profile_blocked,
-                "continuous": self.continuous, "total_requests": self.total_requests}
+                "continuous": self.continuous, "total_requests": self.total_requests,
+                "selected_army": self.focus_status}
         with self.archive.lock:
             result["jobs"] = [dict(r) for r in self.archive.db.execute('''SELECT kind,state,COUNT(*) AS count
                 FROM report_read_jobs WHERE profile_id=? GROUP BY kind,state''', (self.profile_id,))]
@@ -79,6 +92,66 @@ class ReportEvidenceReader:
         self.wake.set()
         return self.snapshot()
 
+    def prioritize_army(self, army_id, *, urgent=False, current=None):
+        """Fetch known evidence for the selected army; fetching never establishes identity."""
+        if not isinstance(army_id, str) or not army_id.isdecimal():
+            return
+        moment = time.monotonic()
+        with self.lock:
+            if not urgent and self.focus_checked[0] == army_id and moment - self.focus_checked[1] < 15:
+                return
+            self.focus_checked = (army_id, moment)
+        if urgent and current is None:
+            with self.archive.read_snapshot(timeout=3) as db:
+                current = db.query('army_lineups',army_id=army_id)
+        with self.archive.lock, self.archive.db:
+            owner = self.archive.db.execute('''SELECT s.data,s.hero_type,p.name,p.union_id
+                FROM live_army_current a JOIN live_army_states s ON s.id=a.state_ref
+                JOIN players p ON p.profile_id=a.profile_id AND p.player_key='world:'||s.owner_uid
+                WHERE a.profile_id=? AND a.army_id=?''', (self.profile_id, army_id)).fetchone()
+            if not owner:
+                return
+            ids = set()
+            profile_priority = URGENT_DETAIL_PRIORITY + 10 if urgent else 130
+            detail_priority = URGENT_DETAIL_PRIORITY if urgent else 120
+            for ref in report_references(json.loads(owner['data'])):
+                bid = str(ref[0])
+                self.archive.intelligence.queue_evidence('profile', bid, retry=True, priority=profile_priority)
+                self.archive.intelligence.queue_evidence('detail', bid, retry=True, priority=detail_priority)
+                ids.add(bid)
+            if urgent:
+                # An incomplete latest report may omit troop positions; still
+                # fetch that exact report instead of resurrecting an older build.
+                bid = current.get('current_report_id')
+                if bid:
+                    self.archive.intelligence.queue_evidence('detail', bid, retry=True, priority=detail_priority)
+                    ids.add(bid)
+            codes = map_troop_codes(owner['hero_type'])
+            rows = self.archive.db.execute('''SELECT battle_id,side,
+                json_extract(features,'$.'||side||'_hero_type') AS troop_raw
+                FROM combat_sides INDEXED BY combat_player
+                WHERE profile_id=? AND union_id=? AND player_name=?
+                ORDER BY event_at DESC,CAST(battle_id AS INTEGER) DESC LIMIT 30''',
+                (self.profile_id, owner['union_id'], owner['name'])).fetchall()
+            matching = []
+            for row in rows:
+                if codes and report_troop_codes(row['troop_raw'], row['side']) == codes:
+                    bid = row['battle_id']
+                    if bid not in matching:
+                        matching.append(bid)
+                    if len(matching) == 3:
+                        break
+            for bid in matching:
+                self.archive.intelligence.queue_evidence('detail', bid, retry=True, priority=detail_priority)
+                ids.add(bid)
+        with self.lock:
+            self.focus_status = {'army_id':army_id, 'player_name':owner['name'],
+                                 'battle_ids':sorted(ids, key=int), 'checked_at':time.time()}
+            if urgent and self.budget_cooldown:
+                self.not_before = min(self.not_before, self.last_completed + self.INTERVAL)
+                self.budget_cooldown = False
+        self.wake.set()
+
     def _received(self, kind, bid):
         table = "battle_reports" if kind == "profile" else "report_bodies"
         return self.archive.db.execute(f"SELECT 1 FROM {table} WHERE profile_id=? AND battle_id=?",
@@ -90,10 +163,12 @@ class ReportEvidenceReader:
                 return
             if time.monotonic() < self.not_before:
                 return
+            self.budget_cooldown = False
             if self.requests >= self.maximum:
                 if self.continuous:
                     self.requests = 0
                     self.not_before = time.monotonic() + 60
+                    self.budget_cooldown = True
                     self.reason = "持续补全冷却60秒，随后自动继续"
                     return
                 self.active, self.reason = False, "达到本轮补全上限，队列已保留，可继续补全"
@@ -115,10 +190,27 @@ class ReportEvidenceReader:
             if self.continuous and not self.profile_blocked:
                 self.reason = "持续跟随新战报编号，自动补全摘要与全文"
         with self.archive.lock, self.archive.db:
+            if self.continuous and time.monotonic() >= self.retry_at:
+                # Bounded retries persist across restarts; unavailable reports do not block later jobs.
+                self.archive.db.execute("""UPDATE report_read_jobs SET state='queued',last_error=NULL
+                    WHERE profile_id=? AND state='failed' AND attempts<3 AND updated_at<?""",
+                    (self.profile_id, time.time() - 300))
+                self.retry_at = time.monotonic() + 60
             rows = self.archive.db.execute('''SELECT * FROM report_read_jobs WHERE profile_id=? AND state='queued'
                 AND (?=0 OR kind='detail') ORDER BY priority DESC,CASE kind WHEN 'profile' THEN 0 ELSE 1 END,
-                CASE kind WHEN 'profile' THEN -queued_at ELSE queued_at END,battle_id LIMIT 15''',
+                CAST(battle_id AS INTEGER) DESC,queued_at LIMIT 15''',
                 (self.profile_id, int(self.profile_blocked))).fetchall()
+            if (self.continuous and self.priority_detail_reads >= 5
+                    and not (rows and rows[0]['priority'] >= URGENT_DETAIL_PRIORITY)):
+                # Preserve priority for main armies without starving other
+                # battles needed for later analysis. One ordinary full-text
+                # opportunity follows every five priority detail attempts.
+                ordinary = self.archive.db.execute('''SELECT * FROM report_read_jobs
+                    WHERE profile_id=? AND state='queued' AND kind='detail' AND priority<?
+                    ORDER BY CAST(battle_id AS INTEGER) DESC LIMIT 1''',
+                    (self.profile_id, MAIN_DETAIL_PRIORITY)).fetchall()
+                if ordinary:
+                    rows = ordinary
             if not rows:
                 if self.continuous:
                     with self.lock:
@@ -143,6 +235,8 @@ class ReportEvidenceReader:
             self.requests += 1
             self.total_requests += 1
             self.waiting = True
+            if kind == 'detail':
+                self.priority_detail_reads = self.priority_detail_reads + 1 if jobs[0]['priority'] >= MAIN_DETAIL_PRIORITY else 0
         error = None
         try:
             if kind == "profile":
@@ -170,6 +264,7 @@ class ReportEvidenceReader:
                     (state, None if received else error, time.time(), self.profile_id, kind, r["battle_id"]))
         with self.lock:
             self.waiting = False
+            self.last_completed = time.monotonic()
             self.not_before = time.monotonic() + self.INTERVAL
             self.failures = 0 if saved else self.failures + 1
             if self.failures >= 2:

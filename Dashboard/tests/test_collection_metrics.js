@@ -1,0 +1,15 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync(require('node:path').join(__dirname,'../static/warroom.js'),'utf8');
+const elements=new Map(),$=id=>{if(!elements.has(id))elements.set(id,{textContent:''});return elements.get(id);};
+const context=vm.createContext({$,number:n=>Number(n).toLocaleString('en-US')});
+vm.runInContext(source.slice(source.indexOf('function renderCollection('),source.indexOf('function renderBackfill(')),context);
+context.value={ready:true,received:{count:90,total:100,ratio:.9},full:{count:30,total:90,ratio:1/3},linked:{count:4,total:10,ratio:.4,checked:7,pending:3}};
+vm.runInContext('renderCollection(value)',context);
+assert.equal($('receivedCoverage').textContent,'90 / 100');assert.equal($('fullCoverage').textContent,'30 / 90');
+assert.equal($('linkedCoverage').textContent,'4 / 10');assert.ok($('fullRatio').textContent.startsWith('33.3%'));
+assert.ok($('collectionNote').textContent.includes('待刷新 3'));
+context.value={ready:true,received:{count:0,total:0,ratio:null},full:{count:0,total:0,ratio:null},linked:{count:0,total:0,ratio:null,checked:0,pending:0}};
+vm.runInContext('renderCollection(value)',context);assert.ok(!$('receivedRatio').textContent.includes('100'));
+vm.runInContext('renderCollection({ready:false})',context);assert.equal($('receivedCoverage').textContent,'—');
+console.log('Separate received/full/linked denominators, pending work and empty-state metrics passed');

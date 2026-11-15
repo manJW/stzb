@@ -1,9 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from archive import Archive
-from installed_mode import ACCOUNT_UPDATE, LOGIN_SNAPSHOT, InstalledCollector, account_update_owner, load_installation, logged_in_role
+from installed_mode import (ACCOUNT_UPDATE, LOGIN_SNAPSHOT, ROLE_DETAIL, InstalledCollector, account_update_owner,
+                            load_installation, logged_in_role)
 from model import WorldState, write_json
 
 
@@ -13,6 +15,12 @@ def login_snapshot(role=300, login_uid=200):
     login = [None] * 7
     login[4] = [[["Tb_user", [user]], ["Tb_user_login", [[login_uid]]]]]
     return login
+
+
+def role_detail(uid=200, role=300):
+    person = [None] * 42
+    person[26], person[41] = uid, role
+    return [0, {"personal": person, "server": ["X测试", 34, 45122, 4]}]
 
 
 class InstalledModeTests(unittest.TestCase):
@@ -45,6 +53,88 @@ class InstalledModeTests(unittest.TestCase):
                 self.assertEqual(archive.profile["account_role_id"], "300")
                 self.assertTrue(state.health["identity_pending"])
                 self.assertEqual(archive.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 1)
+            finally:
+                archive.close()
+
+    def test_no_fields_autodetects_scope_and_keeps_other_players_out(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            write_json(root / "install-settings.json", {"executable": "C:/Game/stzb.exe", "dumpcap": "C:/Wireshark/dumpcap.exe"})
+            profile, settings = load_installation(root)
+            state = WorldState(root)
+            archive = Archive(root, profile=profile)
+            try:
+                collector = InstalledCollector(state, archive, settings)
+                scene = [None] * 34
+                scene[1] = {"200": ["测试角色", 300, 401] + [0] * 9 + [[0, 0, "测试盟"]]}
+                scene[18] = 1
+                own_update = [[2, "Tb_user_res", [0, 200, 2, 100]]]
+                collector._message(ACCOUNT_UPDATE, own_update, 1000)
+                collector._message(5026, scene, 1001)
+                self.assertTrue(collector.identity_ready)
+                self.assertTrue(state.health["scope_pending"])
+                self.assertEqual(archive.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 0)
+                collector._message(ROLE_DETAIL, role_detail(uid=201), 1002)
+                self.assertTrue(state.health["scope_pending"])
+                collector.connection_key = "verified-session"
+                collector._message(ROLE_DETAIL, role_detail(), 1003)
+                self.assertFalse(state.health["scope_pending"])
+                self.assertEqual((archive.profile["server"], archive.profile["season"], archive.profile["server_label"]),
+                                 ("server-45122", "season-4", "X测试"))
+                collector._wait_for_identity()
+                collector.cached_scope = collector._read_connection_scope()
+                collector._message(ACCOUNT_UPDATE, own_update, 1004)
+                collector._message(5026, scene, 1005)
+                self.assertTrue(collector.archive_ready)
+                self.assertEqual([row[0] for row in archive.db.execute("SELECT message_id FROM messages")], [5026])
+                changed = login_snapshot()
+                changed[5] = 45123
+                changed[4][0].append(["Tb_season_user", [[200, 5]]])
+                collector._message(LOGIN_SNAPSHOT, changed, 1006)
+                self.assertFalse(collector.archive_ready)
+                self.assertEqual((archive.profile["server"], archive.profile["season"]), ("server-45122", "season-4"))
+            finally:
+                archive.close()
+
+    def test_login_scope_uses_only_the_logged_in_characters_season(self):
+        snapshot = login_snapshot()
+        snapshot[5] = 45122
+        snapshot[4][0].append(["Tb_season_user", [[201, 4]]])
+        self.assertNotIn("scope", logged_in_role(snapshot))
+        snapshot[4][0][-1][1][0][0] = 200
+        scope = logged_in_role(snapshot)["scope"]
+        self.assertEqual((scope["server"], scope["season"]), ("server-45122", "season-4"))
+
+    def test_own_profile_binds_without_private_updates_and_reopens_same_connection(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            write_json(root / "install-settings.json", {"executable": "C:/Game/stzb.exe", "dumpcap": "C:/Wireshark/dumpcap.exe"})
+            profile, settings = load_installation(root)
+            state = WorldState(root)
+            archive = Archive(root, profile=profile)
+            try:
+                collector = InstalledCollector(state, archive, settings)
+                connection = {"pid": 10, "connection_started": 100, "local_port": 200}
+                detail = role_detail()
+                detail[1]["personal"][0] = "测试角色#1234567"
+                detail[1]["log"] = {"role_id": "marker-a", "role_name": "测试角色#1234567"}
+                detail[1]["union"] = [0, "", 401, "测试盟"]
+                with patch("installed_mode.client_role_marker", return_value="marker-b"):
+                    collector._prepare_connection(connection)
+                    collector._message(ROLE_DETAIL, detail, 1000)
+                    self.assertFalse(collector.identity_ready)
+                with patch("installed_mode.client_role_marker", return_value="marker-a"):
+                    collector._message(ROLE_DETAIL, detail, 1001)
+                    self.assertTrue(collector.archive_ready)
+                    self.assertEqual(archive.profile["account_name"], "测试角色")
+                    collector._prepare_connection(connection)
+                    self.assertTrue(collector.archive_ready)
+                    collector._prepare_connection({**connection, "connection_started": 101})
+                    self.assertFalse(collector.identity_ready)
+                with patch("installed_mode.client_role_marker", return_value="marker-b"):
+                    collector._prepare_connection(connection)
+                    self.assertFalse(collector.identity_ready)
+                self.assertEqual(archive.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 0)
             finally:
                 archive.close()
 

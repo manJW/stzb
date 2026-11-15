@@ -7,7 +7,7 @@ from observation_codec import integers, number
 
 # Titles verified on the game's world-event list for this season. The server
 # sends the event and map coordinate; the client renders its county title.
-VERIFIED_NAMES = {('X0000', 'example-season'): {139: '谯之战', 265: '怀之战', 300: '城父之战'}}
+VERIFIED_NAMES = {('X6147', 'current-20261105'): {139: '谯之战', 265: '怀之战', 300: '城父之战'}}
 
 
 def world_events(message_id, payload):

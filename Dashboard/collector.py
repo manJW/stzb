@@ -8,12 +8,14 @@ import threading
 import time
 from pathlib import Path
 
-from capture_decoder import MAX_FRAME, decode_body
+from model import CAPTURE_SILENCE_SECONDS
 
 ROOT = Path(__file__).resolve().parent
+import capture_decoder as DECODER
 DUMPCAP = r"F:\Program Files\Wireshark\dumpcap.exe"
 MUMU_CLI = r"F:\Program Files\Netease\MuMu\nx_main\mumu-cli.exe"
 PC_EXECUTABLE = r"E:\Program Files (x86)\stzb\stzb.exe"
+DASHEN_EXECUTABLE = r"D:\DSemulator\GLClient\GLEmulator.exe"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -39,7 +41,7 @@ class MessageFramer:
             if total == 12:
                 offset += 12
                 continue
-            if not header <= total <= MAX_FRAME:
+            if not header <= total <= DECODER.MAX_FRAME:
                 offset += 1
                 continue
             if len(self.buffer) - offset < header:
@@ -56,7 +58,7 @@ class MessageFramer:
                 continue
             frame = bytes(self.buffer[offset:offset + total])
             try:
-                value = decode_body(frame, self.client)
+                value = DECODER.decode_body(frame, self.client)
             except ValueError:
                 self.on_error()
                 offset += 1
@@ -248,6 +250,46 @@ def discover_pc_connection(executable=None):
     return connection
 
 
+def discover_dashen_connection(executable=None):
+    executable = str(executable or DASHEN_EXECUTABLE)
+    script = (
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+        "$all=Get-CimInstance Win32_Process;"
+        "$hosts=@($all|Where-Object { $_.Name -eq 'GLEmulator.exe' -and "
+        "$_.ExecutablePath -eq $env:STLAB_DASHEN_EXECUTABLE });"
+        "if($hosts.Count -eq 1){$hostProcess=$hosts[0];"
+        r"$workerPath=Join-Path (Split-Path (Split-Path $hostProcess.ExecutablePath)) 'vbox\VBoxHeadless.exe';"
+        "$workers=@($all|Where-Object { $_.ParentProcessId -eq $hostProcess.ProcessId -and "
+        "$_.Name -eq 'VBoxHeadless.exe' -and $_.ExecutablePath -eq $workerPath });"
+        "$links=@(foreach($worker in $workers){Get-NetTCPConnection -OwningProcess $worker.ProcessId "
+        "-RemotePort 8001 -State Established -ErrorAction SilentlyContinue});"
+        "if($links.Count -eq 1){$c=$links[0];$worker=$workers|Where-Object { $_.ProcessId -eq $c.OwningProcess };"
+        "$i=Get-NetIPAddress -IPAddress $c.LocalAddress -ErrorAction SilentlyContinue|Select-Object -First 1;"
+        "$a=Get-NetAdapter -InterfaceIndex $i.InterfaceIndex -ErrorAction SilentlyContinue;"
+        "[pscustomobject]@{peer=$c.RemoteAddress;local=$c.LocalAddress;pid=$worker.ProcessId;"
+        "host_pid=$hostProcess.ProcessId;executable=$hostProcess.ExecutablePath;worker_executable=$worker.ExecutablePath;"
+        "source='dashen';local_port=$c.LocalPort;"
+        "connection_started=if($c.CreationTime){$c.CreationTime.ToUniversalTime().Ticks}else{0};"
+        "interface=('\\Device\\NPF_{'+([Guid]$a.InterfaceGuid).ToString('D').ToUpperInvariant()+'}')}|ConvertTo-Json -Compress}}"
+    )
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-Command", script], capture_output=True,
+                            encoding="utf-8", errors="replace", timeout=20, creationflags=NO_WINDOW,
+                            env={**os.environ, "STLAB_DASHEN_EXECUTABLE": executable})
+    if not result.stdout.strip():
+        return None
+    connection = json.loads(result.stdout)
+    ipaddress.IPv4Address(connection["peer"])
+    ipaddress.IPv4Address(connection["local"])
+    worker_path = str(Path(executable).parent.parent / "vbox" / "VBoxHeadless.exe")
+    if (str(connection.get("executable", "")).casefold() != executable.casefold()
+            or str(connection.get("worker_executable", "")).casefold() != worker_path.casefold()
+            or int(connection["pid"]) <= 0 or int(connection.get("host_pid", 0)) <= 0):
+        raise ValueError("大神模拟器进程与配置的启动程序不一致")
+    if not 0 < int(connection["local_port"]) < 65536 or not connection["interface"].startswith("\\Device\\NPF_{"):
+        raise ValueError("大神模拟器连接信息无效")
+    return connection
+
+
 class Collector:
     def __init__(self, state, archive=None, settings=None):
         self.state = state
@@ -257,23 +299,40 @@ class Collector:
             settings = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         self.source = settings.get("mode", "mumu")
         self.pc_executable = settings.get("executable")
+        self.dashen_executable = settings.get("emulator_executable", DASHEN_EXECUTABLE)
         self.dumpcap = settings.get("dumpcap", DUMPCAP)
         self.incoming_ids = None
-        if self.source not in ("pc", "mumu"):
-            raise ValueError("采集来源只能是 pc 或 mumu")
+        if self.source not in ("pc", "mumu", "dashen"):
+            raise ValueError("采集来源只能是 pc、mumu 或 dashen")
         if settings.get("profile_id") and (archive is None or settings["profile_id"] != archive.profile_id):
             raise ValueError("采集来源绑定的账号、赛季与当前档案不一致")
         self.state.health["capture_source"] = self.source
         self.stop_event = threading.Event()
         self.process = None
         self.report_observer = None
+        self.relation_observer = None
         self.thread = threading.Thread(target=self.run, daemon=True, name="game-collector")
+        self.map_recovery = None
+        self.game_click_focus = None
+        if self.source == "dashen":
+            from android_map_recovery import MapRecovery
+            from game_click_focus import GameClickFocus
+            self.map_recovery = MapRecovery(state)
+            self.game_click_focus = GameClickFocus(state)
 
     def start(self):
         self.thread.start()
+        if self.map_recovery:
+            self.map_recovery.start()
+        if self.game_click_focus:
+            self.game_click_focus.start()
 
     def stop(self):
         self.stop_event.set()
+        if self.game_click_focus:
+            self.game_click_focus.stop()
+        if self.map_recovery:
+            self.map_recovery.stop()
         if self.process and self.process.poll() is None:
             self.process.terminate()
 
@@ -298,18 +357,31 @@ class Collector:
         if mid == 92 and self.report_observer and stats is not None:
             self.report_observer.on_page(value, observed_at, stats)
         self.state.apply(mid, value, observed_at)
+        if mid in (6326,6327) and self.relation_observer:
+            try:
+                self.relation_observer(mid,value,observed_at)
+            except Exception as error:
+                # Diplomacy persistence must not interrupt the map stream.
+                with self.state.lock:
+                    self.state.health['union_relations']={
+                        **self.state.health.get('union_relations',{}),'status':'retrying',
+                        'last_error':type(error).__name__}
+        if self.game_click_focus:
+            self.game_click_focus.on_message(mid, value, observed_at)
 
     def _request(self, mid, value, observed_at):
         # No client headers or unrelated request bodies leave the in-memory framer.
         if mid == 92 and self.report_observer:
             self.report_observer.on_request(value, observed_at)
+        if self.game_click_focus:
+            self.game_click_focus.on_request(mid, value, observed_at)
 
     def run(self):
         while not self.stop_event.is_set():
             try:
                 connection = self._discover()
                 if not connection:
-                    label = "PC版" if self.source == "pc" else "MuMu"
+                    label = {"pc": "PC版", "mumu": "MuMu", "dashen": "大神模拟器"}[self.source]
                     self.state.connection("waiting", f"等待{label}中的游戏连接，请保持地图在线")
                     self.stop_event.wait(5)
                     continue
@@ -323,13 +395,29 @@ class Collector:
     def _discover(self):
         if self.source == "pc":
             return discover_pc_connection(self.pc_executable) if self.pc_executable else discover_pc_connection()
+        if self.source == "dashen":
+            return discover_dashen_connection(self.dashen_executable)
         return discover_connection()
+
+    def _verify_capture(self, connection, process, started_at):
+        current = self._discover()
+        keys = ("peer", "pid", "interface", "local", "local_port", "connection_started")
+        if process.poll() is not None or not current or any(current.get(key) != connection.get(key) for key in keys):
+            return False
+        moment = time.time()
+        with self.state.lock:
+            last_packet = max(started_at, self.state.health.get("last_packet_at", 0))
+        if moment - last_packet > CAPTURE_SILENCE_SECONDS:
+            return False
+        self.state.verify_connection(connection, moment)
+        return True
 
     def capture(self, connection):
         peer = connection["peer"]
         capture_filter = (f"src host {peer} and tcp src port 8001 and "
                           f"dst host {connection['local']} and tcp dst port {int(connection['local_port'])}")
-        observe_requests = self.source == "pc" and self.report_observer is not None
+        observe_requests = (self.source == "pc" and self.report_observer is not None) or self.source == "dashen"
+        request_ids = ({21, 92} if self.report_observer is not None else {21}) if self.source == "dashen" else {92}
         if observe_requests:
             capture_filter = (f"({capture_filter}) or (src host {connection['local']} and "
                 f"tcp src port {int(connection['local_port'])} and dst host {peer} and tcp dst port 8001)")
@@ -342,17 +430,20 @@ class Collector:
             self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=log,
                                             creationflags=NO_WINDOW, bufsize=0)
             process = self.process
+            started_at = time.time()
             self.state.connection("live", "等待新的地图消息", connection)
+            self.state.verify_connection(connection, started_at)
             def monitor():
                 while not stopped.wait(15):
                     if self.stop_event.is_set():
                         process.terminate()
                         return
                     try:
-                        current = self._discover()
+                        valid = self._verify_capture(connection, process, started_at)
                     except Exception:
                         continue
-                    if not current or any(current[key] != connection[key] for key in ("peer", "pid", "interface", "local", "local_port")):
+                    if not valid:
+                        self.state.connection("reconnecting", "游戏连接变化或采集静默，正在重新接入")
                         process.terminate()
                         return
             threading.Thread(target=monitor, daemon=True, name="connection-monitor").start()
@@ -378,14 +469,18 @@ class Collector:
                         self.state.packet(observed_at)
                     key = (src, sport, dst, dport)
                     def request_gap():
-                        if self.report_observer:
+                        if self.source in ("pc", "dashen") and self.report_observer is not None:
                             self.report_observer.fail("请求观测中断，已暂停翻页")
+                        if self.game_click_focus:
+                            self.game_click_focus.request_gap()
                     framer = MessageFramer(self._message, self._decode_error, accepted_ids=self.incoming_ids) if incoming else MessageFramer(
-                        self._request, request_gap, client=True, accepted_ids={92})
+                        self._request, request_gap, client=True, accepted_ids=request_ids)
                     stream = streams.setdefault(key, TCPStream(framer, self.state.gap if incoming else request_gap))
                     stream.feed(seq, payload, observed_at, bool(flags & 2))
                     if flags & 5:
                         streams.pop(key, None)
+                        if incoming:
+                            break
                     if time.monotonic() - saved_at > 10:
                         self.state.persist()
                         saved_at = time.monotonic()

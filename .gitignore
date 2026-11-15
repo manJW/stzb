@@ -6,8 +6,10 @@ __pycache__/
 /Dashboard/archive-profile.json
 /Dashboard/capture-source.json
 /Dashboard/config.json
+/Dashboard/install-settings.json
 /Dashboard/data/
 /Dashboard/runtime/
+/Builds/
 /Captures/
 /Exports/
 /Installers/
@@ -15,5 +17,7 @@ __pycache__/
 /ReverseAnalysis/
 /Samples/
 *.sqlite3*
+!/SharedData/**/*.part
 *.pcap*
 *.log
+*.tmp

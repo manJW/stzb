@@ -1,0 +1,339 @@
+{
+  "format": 1,
+  "source_version": "0.2.4",
+  "snapshot_at_utc": "2026-11-15T04:17:09.675405+00:00",
+  "snapshot_bytes": 2016849920,
+  "snapshot_sha256": "a4210c3d66763dbf241a5e766481be6e0e3a800c993b92e540f4ec670fd7d717",
+  "compressed_bytes": 191298456,
+  "compressed_sha256": "ff780f827799d23d2b0f2a3819751362d86c34dd1489a29026572acf157b8d06",
+  "excluded_table_contents": [
+    "client_table_events",
+    "message_fields",
+    "message_redactions",
+    "messages",
+    "pilot_members",
+    "report_read_jobs"
+  ],
+  "table_counts": {
+    "archived_official_campaigns": 0,
+    "army_current": 3188,
+    "army_lineup_projection": 3188,
+    "army_report_refs": 2474,
+    "army_states": 42846,
+    "attendance_dirty": 0,
+    "attendance_facts": 113176,
+    "attendance_meta": 2,
+    "attendance_roster": 401,
+    "attendance_rule_history": 0,
+    "attendance_rules": 0,
+    "battle_march_links": 10124,
+    "battle_reports": 76253,
+    "campaign_views": 1,
+    "client_table_events": 0,
+    "combat_sides": 147736,
+    "durability_snapshots": 59,
+    "formation_configs": 22010,
+    "formation_facts": 125176,
+    "formation_teams": 11733,
+    "lineup_army_dirty": 0,
+    "lineup_forecasts": 5576,
+    "lineup_player_revisions": 2303,
+    "lineup_projection_meta": 2,
+    "lineup_rule_migrations": 16,
+    "march_samples": 27923,
+    "member_metric_snapshots": 4412,
+    "message_fields": 0,
+    "message_redactions": 0,
+    "messages": 0,
+    "observations": 97345,
+    "own_report_indices": 105,
+    "pilot_members": 0,
+    "player_traits": 1656,
+    "players": 4171,
+    "profile_aliases": 1,
+    "profiles": 2,
+    "report_bodies": 22463,
+    "report_briefs": 16,
+    "report_collection_state": 76498,
+    "report_read_jobs": 0,
+    "reported_armies": 3188,
+    "retention_ignored_ids": 54199,
+    "retention_policy": 2,
+    "roster_observations": 3761,
+    "same_army_audits": 598,
+    "source_sightings": 126018,
+    "team_archive_policy": 2,
+    "team_current": 10069,
+    "team_versions": 125956,
+    "territory_current": 4914,
+    "territory_events": 14974,
+    "tiles": 26882,
+    "unions": 58
+  },
+  "active_profile": "d8bf78f9aaa091a55ce23fd6",
+  "profiles": [
+    {
+      "id": "15230a7fc42e4afb05f28d6b",
+      "profile": {
+        "account_name": "时运丨天远",
+        "account_role_id": "12319",
+        "battle_role_id": "3u7cmfs506745",
+        "force_type": 0,
+        "is_wanderer": false,
+        "season": "season-4",
+        "season_label": "赛季 4",
+        "server": "server-45122",
+        "union_id": "1009",
+        "union_name": "風丨金球凯恩"
+      }
+    },
+    {
+      "id": "2be15f320093cc1970520506",
+      "profile": {
+        "account_name": "旗亭丨小迁",
+        "account_role_id": "12202",
+        "battle_role_id": "pbtahxk3521",
+        "force_type": 1,
+        "is_wanderer": true,
+        "season": "season-4",
+        "season_label": "赛季 4",
+        "server": "server-45122",
+        "union_id": "1135",
+        "union_name": "風丨星星之火"
+      }
+    }
+  ],
+  "parts": [
+    {
+      "file": "intelligence.sqlite3.xz.0001.part",
+      "bytes": 4194304,
+      "sha256": "315a8c50fa31d4176f8f9485e67ad2e9da0230a10dcb5511ad3b388e401014cb"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0002.part",
+      "bytes": 4194304,
+      "sha256": "3685ee42b9b45fcf69fce6dc03915724284871e789dd816c2c05ff7aaaf3a22e"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0003.part",
+      "bytes": 4194304,
+      "sha256": "08e4a11c744358e0a1a4b8780dd99beb5eb2ffdba53003d59596665c99632cdc"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0004.part",
+      "bytes": 4194304,
+      "sha256": "7177ecf05f4c3c763e92db0b2d81da89ec32dd40099fa693f6572405f9afaf44"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0005.part",
+      "bytes": 4194304,
+      "sha256": "0ce42f0202b8314eaa9699579e08b0a9496811592b056c79506d14b72d510d1a"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0006.part",
+      "bytes": 4194304,
+      "sha256": "61c854d59a0543355c2004d19ca9647b1d16e7b710d354da484ff5bd74968fc2"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0007.part",
+      "bytes": 4194304,
+      "sha256": "8a9bd8d5d6d0af9011b7bbc33edc8b91d2418f77cc1581f2c2501a9c30ebb4ef"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0008.part",
+      "bytes": 4194304,
+      "sha256": "3830af32255ecce56b760b48d82edb456de2f5250731c51687228045b41b3d79"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0009.part",
+      "bytes": 4194304,
+      "sha256": "a876624ffc1e85be79ca8a5eebe09f54544d93fa24726750a2204efdd76d7c2b"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0010.part",
+      "bytes": 4194304,
+      "sha256": "363a83406731ed32efa56045f32ab77b590b55447622c78c02427a2da9ba44e5"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0011.part",
+      "bytes": 4194304,
+      "sha256": "6838d890efe2171c486faaeba5bd1e63643c75e59993396edc7fe44d6aedb569"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0012.part",
+      "bytes": 4194304,
+      "sha256": "6bfb6085b15abf5035b513ba43608fbaaa457fd81385271855d9db4d1a36ef4f"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0013.part",
+      "bytes": 4194304,
+      "sha256": "d8e4b7b595a4be44f5b0f9b75cdb75504139887747d7ba6e1e1c65a4d31b1384"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0014.part",
+      "bytes": 4194304,
+      "sha256": "5a4b489293688251fb6d8daf3cb95cda004932a0025c3ffd6c6e211749518516"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0015.part",
+      "bytes": 4194304,
+      "sha256": "26c7840ee2eeced7155ac22d960f552260e9f82c5af393758471f1d5018fb142"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0016.part",
+      "bytes": 4194304,
+      "sha256": "7eb78bef96136081aede719e2b43bdef45634e0a9128a3afef248eebb3c349bd"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0017.part",
+      "bytes": 4194304,
+      "sha256": "a20959c6e753b5368574853a78e7e6fe496026ae77fd84373b4a08afb59ce4b9"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0018.part",
+      "bytes": 4194304,
+      "sha256": "e8ff847d25f43bfb78674505fcb264dcba088af7b4dd14d7af82e9bd2e263e83"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0019.part",
+      "bytes": 4194304,
+      "sha256": "ed21f63b14da8ae21b31d04666c5b2d21a4fb9520b3e3788da426be911bcfebe"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0020.part",
+      "bytes": 4194304,
+      "sha256": "4f6f97a6020ab72d79f3d90a952e5ec6cfdda2e868bc64b748b1c1e0a2f31b81"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0021.part",
+      "bytes": 4194304,
+      "sha256": "70e10c3fb1d20286d03f334e132cf942296f0add81bc5b59b9f5c29b42180d72"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0022.part",
+      "bytes": 4194304,
+      "sha256": "95848a1cc913a6d6dfd3ef89dba07ea439e03cd2cf94eb44ca5fe3eedf6a1f3a"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0023.part",
+      "bytes": 4194304,
+      "sha256": "eb88f2ca223f4cd9e6fe409a9372cfb2d352f54493f1d1a04ab6dd2d25effe25"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0024.part",
+      "bytes": 4194304,
+      "sha256": "c52b56a7085231fbba0cd519c3ebe66778fca5e399e8e44e7b198a0fa08929fc"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0025.part",
+      "bytes": 4194304,
+      "sha256": "09afa4a018745e28099a9b8e3565f65415fcc8a64f6100919a19a36f9a573b29"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0026.part",
+      "bytes": 4194304,
+      "sha256": "ddab71d97da771d1d08c75f77a53c4f614668d515a76bee801512ec70542e4ee"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0027.part",
+      "bytes": 4194304,
+      "sha256": "6f54aa9ade1cfc0fe260db3520b023b0ada9196b19c797e625aac0e9cc1f8f3a"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0028.part",
+      "bytes": 4194304,
+      "sha256": "78e4dd96b30d32fe486a00cc0f8ba2161981ece5fde1401243449f7b96b7e151"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0029.part",
+      "bytes": 4194304,
+      "sha256": "e286aa51d9334d420309e4222ebed57e144bd2489f622d2f99a29d77b0a976c3"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0030.part",
+      "bytes": 4194304,
+      "sha256": "c6602a1394fd996f8180b605a4ef7f816cbe7a345326726475fb83498c4f343f"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0031.part",
+      "bytes": 4194304,
+      "sha256": "061d183f418f01d8fae2f8fd20ea5d8e1e77ffec427f1a6c24890a80cc5594d6"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0032.part",
+      "bytes": 4194304,
+      "sha256": "29026f6e97ae59596cb3e158e1463360cc3843f8e6f06e9418123ce53e182c99"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0033.part",
+      "bytes": 4194304,
+      "sha256": "73e1fb067b6c3644e875d7b18370db73f9a48a6413f79a0b057036f960d10d1a"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0034.part",
+      "bytes": 4194304,
+      "sha256": "ee391588c8c3b31079e915e1526a6569ac7892249f3949ac6cc0a4acbdc4e574"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0035.part",
+      "bytes": 4194304,
+      "sha256": "b6142b35b6ef61b00c08e8fa2d01aaa770691ef0b259c043e438c163e30b9696"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0036.part",
+      "bytes": 4194304,
+      "sha256": "c17b40e38907b80123246e7477a5873273acc02979ec29cc35519f4f551881c4"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0037.part",
+      "bytes": 4194304,
+      "sha256": "30d913abddbc785a09378bd9f188e662579a0b45c80d0f7212f6c59f9e14a693"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0038.part",
+      "bytes": 4194304,
+      "sha256": "333d47098369e7144e8a9d9e0c6a1e4727e827d97126d2059df6bd5a0f84e6d7"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0039.part",
+      "bytes": 4194304,
+      "sha256": "80505a4b68d7622e350dc25b3e677d344db9638aef10233c3a38398261b0254c"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0040.part",
+      "bytes": 4194304,
+      "sha256": "2bcc10e7c56b410158d31218ae0ef7f7683e0db00775bf5b75d01e9458939502"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0041.part",
+      "bytes": 4194304,
+      "sha256": "c199d80f9355035ee3ab9e02c471cd52e0cb3068b490d3215742b7524dfbb596"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0042.part",
+      "bytes": 4194304,
+      "sha256": "670248f2ba02c4287a8814f92d6b9208c569f5dfc59277c0085079db7e25e22a"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0043.part",
+      "bytes": 4194304,
+      "sha256": "5cb03d76a9e32bfd0538ce2eecfbbb8bb5788c5b783cf35e2045b9ec85884487"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0044.part",
+      "bytes": 4194304,
+      "sha256": "85b4bee2b74dd7bbff42f0cae1602456d22dba1a6d48f713852fbf435ddb0c94"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0045.part",
+      "bytes": 4194304,
+      "sha256": "8c2456072c3fa072e8817e2eae42c06e4343280fa4f6d0bb5f86cf0a08260c8a"
+    },
+    {
+      "file": "intelligence.sqlite3.xz.0046.part",
+      "bytes": 2554776,
+      "sha256": "cb00d95b2364d88dca2027eb0073dc98e77d0407bd6b1e7fec2a2f567a494ad8"
+    }
+  ],
+  "compression": "xz"
+}

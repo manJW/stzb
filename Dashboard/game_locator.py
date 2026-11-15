@@ -89,8 +89,11 @@ class GameLocator:
 
 
 class CoordinateControls:
-    def __init__(self):
-        self.templates = {name: Image.open(ASSETS / (name + '.png')).convert('L') for name in ANCHORS}
+    def __init__(self, anchors=None, asset_names=None):
+        self.anchors = anchors or ANCHORS
+        asset_names = asset_names or {}
+        self.templates = {name: Image.open(ASSETS / (asset_names.get(name, name) + '.png')).convert('L')
+                          for name in self.anchors}
         strip = Image.open(ASSETS / 'digits.png').convert('L')
         self.digits = []
         for n in range(10):
@@ -105,7 +108,7 @@ class CoordinateControls:
             self.digits.append(variants)
 
     def find(self, image, name):
-        right, vertical, from_bottom = ANCHORS[name]
+        right, vertical, from_bottom = self.anchors[name]
         width, height = image.size
         grey = image.convert('L')
         best = (float('inf'), None)
@@ -166,7 +169,9 @@ class CoordinateControls:
 
 class WindowsOcr:
     def __enter__(self):
-        self.directory = tempfile.TemporaryDirectory(prefix='game-ocr-', dir=ROOT / 'runtime')
+        runtime = Path(os.environ.get('STZB_RUNTIME_ROOT', str(ROOT / 'runtime')))
+        runtime.mkdir(parents=True, exist_ok=True)
+        self.directory = tempfile.TemporaryDirectory(prefix='game-ocr-', dir=runtime)
         self.sequence = 0
         try:
             self.proc = subprocess.Popen(

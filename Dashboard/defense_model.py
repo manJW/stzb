@@ -1,8 +1,31 @@
 """Shrink comparable defender outcomes toward the observed alliance baseline."""
 from functools import lru_cache
+from contextlib import contextmanager
 from math import exp, log
+import threading
+import time
 
 from lineup_prediction import troop_total
+
+
+_budget = threading.local()
+
+
+@contextmanager
+def analysis_budget(seconds=3):
+    previous = getattr(_budget, 'deadline', None)
+    deadline = time.monotonic() + seconds
+    _budget.deadline = min(previous, deadline) if previous is not None else deadline
+    try:
+        yield
+    finally:
+        _budget.deadline = previous
+
+
+def check_analysis_budget():
+    deadline = getattr(_budget, 'deadline', None)
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError('本次分析超过时限，请稍后重试；实时采集继续运行')
 
 
 def profile(heroes):
@@ -27,7 +50,10 @@ def estimate(records, matchup, prior, *, use_skills=False, use_troops=False):
     lineup_cases = power_cases = 0
     skill_cases = troop_cases = 0
     troop_gap = gaps[3] if use_troops and len(gaps) > 3 else None
-    for (past_own, past_enemy, past_gaps, *past_skill_pairs), won in records:
+    check_analysis_budget()
+    for index, ((past_own, past_enemy, past_gaps, *past_skill_pairs), won) in enumerate(records):
+        if index % 256 == 0:
+            check_analysis_budget()
         overlap = len(own & past_own)
         if overlap >= 2:
             weight = (overlap / 3) ** 3
@@ -78,6 +104,7 @@ def validate(records, use_skills=False, *, use_troops=False, start=.7, end=1.):
     model_error = base_error = 0.
     evaluated = 0
     for at, _, matchup, won in records[int(len(records) * start):int(len(records) * end)]:
+        check_analysis_budget()
         while next_case and next_case[1] < at:
             _, _, earlier_matchup, earlier_won = next_case
             known.append((earlier_matchup, earlier_won))

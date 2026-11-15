@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from archive import Archive
+from test_support import Archive
 from member_client import MemberCollector, Outbox, Uploader
 from member_receiver import enroll, receiver, sources
 from share_protocol import UPLOAD_PATH, project_report, project_scene
@@ -32,7 +32,7 @@ class MemberSharingTests(unittest.TestCase):
         self.port = self.service.server_address[1]
         for name, uid, role in (("member-a", "201", "9201"), ("member-b", "202", "9202")):
             with self.archive.db:
-                self.archive._player("world:"+uid, name, 1909, "alliance", self.now, "world_scene", role, uid)
+                self.archive._player("world:"+uid, name, 1009, "alliance", self.now, "world_scene", role, uid)
         self.a = enroll(self.archive, "member-a", f"http://127.0.0.1:{self.port}")
         self.b = enroll(self.archive, "member-b", f"http://127.0.0.1:{self.port}")
 
@@ -63,7 +63,7 @@ class MemberSharingTests(unittest.TestCase):
         report = battle(at=at-10)
         self.archive.ingest(92, [report], at-5, source="pc-live")
         for invitation, observed in ((self.a, at), (self.b, at-1), (self.a, at-2)):
-            events = [[5026, observed, project_scene(scene)], [92, observed, project_report(report, "1909")]]
+            events = [[5026, observed, project_scene(scene)], [92, observed, project_report(report, "1009")]]
             self.assertEqual(self.send(invitation, events), (200, {"accepted": 2}))
         remote = world(aid="9002", end=at+60)
         remote[6]["9002"][4] = at
@@ -83,13 +83,14 @@ class MemberSharingTests(unittest.TestCase):
         self.assertEqual({row["name"] for row in sources(self.archive) if row["last_received_at"]}, {"member-a", "member-b"})
 
     def test_scope_invitation_and_full_report_guards(self):
-        report = project_report(battle(at=self.now-5), "1909")
+        report = project_report(battle(at=self.now-5), "1009")
         event = [[92, self.now, report]]
         self.assertEqual(self.send(self.a, event, authorized=False)[0], 401)
         self.assertEqual(self.send(self.a, event, scope={**self.a["scope"], "season": "another"})[0], 400)
         self.assertEqual(self.send(self.a, event, identity=self.b["identity"])[0], 400)
         self.assertEqual(self.send(self.a, [[92, self.now, {**report, "defend_unionid": 333}]])[0], 400)
         self.assertEqual(self.send(self.a, [[6231, self.now, {"battle_id": 99, "report": "unknown"}]])[0], 400)
+        self.assertEqual(self.send(self.a, [[11, self.now, {"battle_id": 99, "report": "unknown"}]])[0], 400)
         self.assertEqual(self.send(self.a, [[92, self.now, {**report, "password": "unexpected"}]])[0], 400)
         self.assertEqual(self.archive.summary()["counts"]["battle_reports"], 0)
         self.assertEqual(self.send(self.a, event)[0], 200)
@@ -107,7 +108,7 @@ class MemberSharingTests(unittest.TestCase):
         scene = world(end=at+40)
         scene[6]["9001"][4] = at-40
         scene[18] = 1
-        scene[1]["201"] = ["member-a", 9201, 1909] + [0]*10
+        scene[1]["201"] = ["member-a", 9201, 1009] + [0]*10
         report = battle(at=at-2)
         collector._message(92, [report], at)
         self.assertFalse(outbox.batch())
@@ -115,7 +116,7 @@ class MemberSharingTests(unittest.TestCase):
         self.assertFalse(outbox.batch())
         collector._message(5026, scene, at)
         collector._message(92, [report, {**report, "battle_id": 3, "defend_unionid": 333}], at)
-        collector._message(6231, [{"battle_id": 1, "report": "full"}, {"battle_id": 3, "report": "foreign"}], at)
+        collector._message(11, [{"battle_id": 1, "report": "full"}, {"battle_id": 3, "report": "foreign"}], at)
         self.assertEqual(len(outbox.batch()), 3)
         stop = threading.Event()
         thread = threading.Thread(target=Uploader(self.a, outbox).run, args=(stop,), daemon=True)

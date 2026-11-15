@@ -12,7 +12,7 @@ from lineup_prediction import meets_main_threshold, player_history, predict
 from observation_codec import describe_troops, digest, map_troop_codes
 
 
-def replay(db, profile, enemies, *, include_pve=True, force=False):
+def replay(db, profile, enemies, *, include_pve=True, force=False, baseline=None):
     rows = db.execute('''SELECT c.player_name,c.union_id,c.hero_key,c.army_id AS direct_army,
         c.observed_at AS report_seen,c.heroes,c.initial_hp,c.npc,c.event_at,l.method,m.* FROM combat_sides c
         JOIN battle_march_links l ON l.profile_id=c.profile_id AND l.battle_id=c.battle_id AND l.side=c.side
@@ -54,13 +54,18 @@ def replay(db, profile, enemies, *, include_pve=True, force=False):
         if force:
             truth = min(complete, key=lambda r:(r['event_at'], -(r['initial_hp'] or 0)))
             actual = meets_main_threshold(json.loads(truth['heroes']))
-            def assess():
-                result = predict(march, histories[name_union], row['observed_at'])
-                return result['force_assessment']['kind'] == 'main'
-            new = assess()
-            with patch('lineup_prediction.main_pattern_assessment', return_value=None):
-                old = assess()
-            results.append((row['observed_at'], actual, old, new))
+            args = march, histories[name_union], row['observed_at']
+            current = predict(*args)
+            if baseline:
+                previous = baseline(*args)
+            else:
+                with patch('lineup_prediction.main_pattern_assessment', return_value=None):
+                    previous = predict(*args)
+            def assess(result):
+                return (result['force_assessment']['kind'] == 'main',
+                        any(item['hero_key'] == truth['hero_key'] for item in result['items']),
+                        bool(result['items']))
+            results.append((row['observed_at'], actual, assess(previous), assess(current)))
             continue
         row = complete[0]
         ranks = {}
@@ -88,8 +93,10 @@ def summarize(rows):
 
 def summarize_force(rows):
     return {'marches':len(rows), 'actual_main':sum(r[1] for r in rows),
-            **{label:{'detected':sum(r[1] and r[column] for r in rows),
-                      'false_main':sum(not r[1] and r[column] for r in rows)}
+            **{label:{'detected':sum(r[1] and r[column][0] for r in rows),
+                      'false_main':sum(not r[1] and r[column][0] for r in rows),
+                      'actual_lineup_in_candidates':sum(r[column][1] for r in rows),
+                      'with_candidates':sum(r[column][2] for r in rows)}
                for column,label in ((2,'previous'),(3,'current'))}}
 
 

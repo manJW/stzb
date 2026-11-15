@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Workspace, [switch]$Stop, [switch]$NoOpen)
+param([Parameter(Mandatory)][string]$Workspace, [switch]$Stop, [switch]$NoOpen, [switch]$Upgrade)
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
@@ -7,6 +7,7 @@ $workspace = [IO.Path]::GetFullPath($Workspace)
 $settingsPath = Join-Path $workspace 'install-settings.json'
 $runtime = Join-Path $workspace 'runtime'
 $servicePath = Join-Path $runtime 'service.json'
+$python = Join-Path $PSScriptRoot 'Python\python.exe'
 
 function Find-Dumpcap {
     $paths = @(
@@ -14,6 +15,7 @@ function Find-Dumpcap {
         (Get-Command dumpcap.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
     )
     foreach ($entry in (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
             'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
             Where-Object DisplayName -like 'Wireshark*')) {
         if ($entry.InstallLocation) {
@@ -77,6 +79,10 @@ function Get-WorkspaceService {
     } catch {}
 }
 
+function Stop-WorkspaceService($record) {
+    Invoke-RestMethod "http://127.0.0.1:$($record.port)/api/stop" -Method Post -Headers @{'X-Local-Stop'=$record.stop_token} -TimeoutSec 10 | Out-Null
+}
+
 $digest = [Security.Cryptography.SHA256]::Create()
 $mutexKey = [BitConverter]::ToString($digest.ComputeHash([Text.Encoding]::UTF8.GetBytes($workspace.ToUpperInvariant()))).Replace('-', '')
 $digest.Dispose()
@@ -88,9 +94,23 @@ try {
     $service = Get-WorkspaceService
     if ($Stop) {
         if ($service) {
-            Invoke-RestMethod "http://127.0.0.1:$($service.port)/api/stop" -Method Post -Headers @{'X-Local-Stop'=$service.stop_token} -TimeoutSec 10 | Out-Null
+            Stop-WorkspaceService $service
         }
         return
+    }
+    if ($Upgrade -and $service) {
+        $running = Get-Process -Id $service.pid -ErrorAction SilentlyContinue
+        if ($running -and $running.Path -ne $python) {
+            $installRoot = [regex]::Escape((Split-Path -Parent $PSScriptRoot))
+            if ($running.Path -notmatch "^$installRoot\\app-[0-9A-F]{16}\\Python\\python\.exe$") {
+                throw '当前看板进程不属于此安装目录，请关闭它后重新运行安装包。'
+            }
+            Stop-WorkspaceService $service
+            if (!$running.WaitForExit(20000)) { throw '旧版看板仍在关闭，请稍后重新运行安装包。' }
+            $service = $null
+        } elseif (!$running) {
+            $service = $null
+        }
     }
     if ($service) {
         if (!$NoOpen) { Start-Process "http://127.0.0.1:$($service.port)/battlefield" }
@@ -107,7 +127,12 @@ try {
         $settings = @{executable=(Resolve-Path -LiteralPath $game).ProviderPath; dumpcap=$dumpcap}
         $settings | ConvertTo-Json | Set-Content -LiteralPath $settingsPath -Encoding UTF8
     }
-    $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, 8787)
+    $preferredPort = 8787
+    if (Test-Path -LiteralPath $servicePath -PathType Leaf) {
+        $previousPort = (Get-Content -LiteralPath $servicePath -Raw | ConvertFrom-Json).port
+        if ($previousPort -ge 1024 -and $previousPort -le 65535) { $preferredPort = [int]$previousPort }
+    }
+    $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, $preferredPort)
     try { $listener.Start() }
     catch [Net.Sockets.SocketException] {
         $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, 0)
@@ -117,7 +142,6 @@ try {
     $listener.Stop()
     $dashboard = Join-Path $PSScriptRoot 'Dashboard'
     $entry = Join-Path $dashboard 'server.py'
-    $python = Join-Path $PSScriptRoot 'Python\python.exe'
     $errors = Join-Path $runtime 'server-error.log'
     $launch = @{
         FilePath=$python

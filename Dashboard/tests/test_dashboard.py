@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from model import WorldState
+from test_support import WorldState
 from collector import MessageFramer, TCPStream, pcap_packets, tcp_packet
 from server import ThreadingHTTPServer, make_handler
 
@@ -23,7 +23,7 @@ def scene(order=10):
     value[1] = {"200": ["test", 0, 2000] + [0] * 9 + [[0, 0, "test union"]]}
     value[3], value[7] = {}, []
     tile = [0] * 21
-    tile[2], tile[3] = 71021, 1909
+    tile[2], tile[3] = 12319, 1009
     value[14] = {"10150926": {"0": tile}}
     raw = [0] * 33
     raw[0], raw[1], raw[2], raw[3] = 3, 200, 10000900, 10150926
@@ -68,6 +68,33 @@ class ModelTests(unittest.TestCase):
         self.state.apply(5028, update, 1006)
         self.assertEqual(self.state.snapshot(1006)['forts'][0]['status'], 'ready')
 
+    def test_army_groups_only_list_current_visible_members_and_keep_personal_ids(self):
+        update=scene(11)
+        for aid in ('first','second'):
+            update[6][aid]=copy.deepcopy(update[6]['army']);update[6][aid][6]=113310331
+        update[12]={'113310331':[2000,3,10000900,10150926]}
+        self.state.apply(5028,update,1001)
+        groups=self.state.snapshot(1002)['army_groups']
+        self.assertEqual(len(groups),1)
+        self.assertEqual(groups[0]['id'],'113310331')
+        self.assertEqual(set(groups[0]['member_ids']),{'first','second'})
+        self.state.armies['first']['visible']=False
+        self.assertEqual(self.state.snapshot(1003)['army_groups'][0]['member_ids'],['second'])
+        self.state.armies['second']['epoch']=-1
+        self.assertEqual(self.state.snapshot(1003)['army_groups'],[])
+
+    def test_legion_members_use_personal_alerts_and_garrison_rules(self):
+        self.hostile();self.state.health['capture_source']='dashen'
+        update=scene(11);update[6]['army'][0]=12;update[6]['army'][6]=113310331
+        update[6]['army'][9]=0
+        self.state.apply(5028,update,1001)
+        snapshot=self.state.snapshot(1002)
+        self.assertEqual(snapshot['armies'][0]['kind'],'attack')
+        self.assertEqual(snapshot['alerts'][0]['army_id'],'army')
+        update[18]=12;update[6]['army'][0]=6;update[6]['army'][2]=update[6]['army'][3]
+        self.state.apply(5028,update,1003)
+        self.assertEqual(self.state.snapshot(1004)['armies'][0]['kind'],'garrison')
+
     def test_snapshot_uses_the_troop_model_code_and_preserves_empty_slots(self):
         self.hostile()
         update = scene(11)
@@ -75,8 +102,8 @@ class ModelTests(unittest.TestCase):
         self.state.apply(5028, update, 1001)
         snapshot = self.state.snapshot(1002)
         self.assertEqual(snapshot["armies"][0]["troops"], [
-            {"position": 1, "code": 21, "name": "弓兵"},
-            {"position": 2, "code": 23, "name": "骑兵"},
+            {"position": 1, "code": 21, "name": "弩兵"},
+            {"position": 2, "code": 23, "name": "轻骑兵"},
             {"position": 3, "code": 0, "name": "空位"},
         ])
         self.assertEqual(snapshot["alerts"][0]["map_hero_count"], 2)
@@ -86,6 +113,51 @@ class ModelTests(unittest.TestCase):
         snapshot = self.state.snapshot(1004)
         self.assertEqual(snapshot["armies"][0]["troops"], [])
         self.assertIsNone(snapshot["alerts"][0]["map_hero_count"])
+
+    def test_occupied_land_uses_owner_relation_and_is_replaced_by_fort(self):
+        self.hostile()
+        update = scene(11)
+        tile = update[14]["10150926"]["0"]
+        tile[0], tile[2], tile[3] = 2, 200, 0
+        update[17][2] = 1015
+        self.state.apply(5028, update, 1001)
+        data = self.state.snapshot(1002)
+        self.assertEqual(data["land_tiles"], [{"coord": [1015, 926], "name": "占领地", "relation": "enemy",
+                                               'faction_group':'enemy_union', 'declared_relation':'enemy',
+                                               'relation_source':'configured', 'is_wanderer':False,
+                                               "owner_id": "200", "union_id": "2000"}])
+        self.assertEqual(data["forts"], [])
+
+        tile[0], tile[8], tile[4] = 4, 1, 1100
+        update[18] = 12
+        self.state.apply(5028, update, 1003)
+        data = self.state.snapshot(1004)
+        self.assertEqual(data["land_tiles"], [])
+        self.assertEqual((data["forts"][0]["relation"], data["forts"][0]["status"]), ("enemy", "building"))
+
+        tile[0], tile[2], update[18] = 2, 0, 13
+        self.state.apply(5028, update, 1005)
+        self.assertEqual(self.state.snapshot(1006)["land_tiles"][0]["relation"], "neutral")
+        tile[2], tile[3], update[18] = 200, 3000, 14
+        self.state.apply(5028, update, 1007)
+        self.assertEqual(self.state.snapshot(1008)["land_tiles"][0]["relation"], "unknown")
+
+    def test_guard_metadata_preserves_distinct_arrival_and_fort_reside_times(self):
+        update = scene(11)
+        raw = update[6]["army"]
+        raw[0], raw[2], raw[3], raw[6], raw[23] = 6, 10150926, 10150926, 17, 777
+        raw[4], raw[5] = 950, 990
+        self.state.apply(5028, update, 1001)
+        row = self.state.snapshot(1002)["armies"][0]
+        self.assertEqual((row["end"], row["reside_time"], row["army_group_id"]), (990, 777, 17))
+        # A fresh fort carries its actual owner/alliance, not just enemy/friendly color.
+        tile = update[14]["10150926"]["0"]
+        tile[0], tile[8], update[18] = 4, 0, 12
+        self.state.apply(5028, update, 1003)
+        fort = self.state.snapshot(1004)["forts"][0]
+        self.assertEqual((fort["owner_id"], fort["union_id"]), ("12319", "1009"))
+        self.state.gap()
+        self.assertEqual(self.state.snapshot(1005)["forts"], [])
 
     def test_unknown_union_is_not_enemy(self):
         data = self.state.snapshot(1001)
@@ -102,10 +174,27 @@ class ModelTests(unittest.TestCase):
         self.state.tiles["10150926"]["owner"] = "200"
         self.assertEqual(self.state.snapshot(1001)["alerts"], [])
 
+    def test_alert_route_uses_map_names_at_both_coordinates(self):
+        self.hostile()
+        update = scene(11)
+        tiles = update[14]
+        tiles["10000900"] = copy.deepcopy(tiles["10150926"])
+        tiles["10000900"]["0"][6] = "谯要塞2"
+        tiles["10150926"]["0"][6] = "陈要塞"
+        self.state.apply(5028, update, 1001)
+        data = self.state.snapshot(1001)
+        for item in (data["alerts"][0], data["armies"][0]):
+            self.assertEqual((item["from_name"], item["target_name"]), ("谯要塞2", "陈要塞"))
+        self.assertEqual(data["alerts"][0]["from"], [1000, 900])
+        tiles["10000900"]["0"][6] = ""
+        update[18] = 12
+        self.state.apply(5028, update, 1002)
+        self.assertEqual(self.state.snapshot(1002)["alerts"][0]["from_name"], "")
+
     def test_member_owned_target_with_no_tile_union_can_alert(self):
         self.hostile()
         update = scene(11)
-        update[1]["201"] = ["ally owner", 0, 1909] + [0] * 9 + [[0, 0, "own union"]]
+        update[1]["201"] = ["ally owner", 0, 1009] + [0] * 9 + [[0, 0, "own union"]]
         tile = update[14]["10150926"]["0"]
         tile[2], tile[3] = 201, 0
         self.state.apply(5028, update, 1001)
@@ -166,6 +255,57 @@ class ModelTests(unittest.TestCase):
         self.state.apply(5028, update, 1020)
         self.assertEqual(self.state.snapshot(1020)["alerts"], [])
 
+    def test_attack_target_side_is_independent_of_expired_ownership(self):
+        self.hostile()
+        update = scene(11)
+        update[14] = {}
+        self.state.packet(1020)
+        self.state.apply(5028, update, 1020)
+        snapshot = self.state.snapshot(1020)
+        row = snapshot["armies"][0]
+        self.assertEqual((row["target_side"], row["target_union_id"]), ("own", "1009"))
+        self.assertFalse(row["target_ownership_fresh"])
+        self.assertFalse(row["incoming"])
+        self.assertEqual(snapshot["alerts"], [])
+        self.assertEqual(snapshot["candidates"][0]["pending_reason"], "地块归属待核对")
+
+        update = scene(12)
+        self.state.apply(5028, update, 1021)
+        row = self.state.snapshot(1021)["armies"][0]
+        self.assertEqual(row["target_side"], "own")
+        self.assertTrue(row["target_ownership_fresh"])
+        self.assertTrue(row["incoming"])
+
+        update[18] = 13
+        update[14]["10150926"]["0"][2:4] = [200, 2000]
+        self.state.apply(5028, update, 1022)
+        row = self.state.snapshot(1022)["armies"][0]
+        self.assertEqual(row["target_side"], "other")
+        self.assertTrue(row["target_ownership_fresh"])
+        self.assertFalse(row["incoming"])
+
+    def test_target_side_uses_member_alliance_without_guessing_missing_members(self):
+        self.hostile()
+        update = scene(11)
+        tile = update[14]["10150926"]["0"]
+        tile[2], tile[3] = 201, 0
+        update[1]["201"] = ["ally owner", 0, 1009] + [0] * 9 + [[0, 0, "own union"]]
+        self.state.apply(5028, update, 1001)
+        row = self.state.snapshot(1001)["armies"][0]
+        self.assertEqual((row["target_side"], row["target_union_id"]), ("own", "1009"))
+        self.assertTrue(row["incoming"])
+
+        tile[2], update[18] = 202, 12
+        self.state.apply(5028, update, 1002)
+        row = self.state.snapshot(1002)["armies"][0]
+        self.assertEqual(row["target_side"], "unknown")
+        self.assertFalse(row["incoming"])
+
+        self.state.tiles.clear()
+        row = self.state.snapshot(1002)["armies"][0]
+        self.assertEqual(row["target_side"], "unknown")
+        self.assertFalse(row["target_ownership_fresh"])
+
     def test_expired_and_old_observations_do_not_alert(self):
         self.hostile()
         self.assertEqual(self.state.snapshot(1101)["alerts"], [])
@@ -218,7 +358,7 @@ class ModelTests(unittest.TestCase):
 
     def test_calibration_rejects_own_enemy_and_old_records(self):
         with self.assertRaises(ValueError):
-            self.state.calibrate({"action": "relation", "union_id": "1909", "relation": "enemy"})
+            self.state.calibrate({"action": "relation", "union_id": "1009", "relation": "enemy"})
         with self.assertRaises(ValueError):
             self.state.calibrate({"action": "state", "army_id": "army", "kind": "attack"})
 
@@ -268,6 +408,71 @@ class ModelTests(unittest.TestCase):
         self.state.gap()
         self.assertTrue(self.state.snapshot(1201)["armies"][0]["stale"])
 
+    def test_quiet_verified_connection_keeps_subscribed_incoming(self):
+        self.hostile()
+        connection = {"pid": 1, "local_port": 20, "connection_started": 1}
+        self.state.connection("live", "test", connection)
+        self.state.armies["army"]["end"] = 3000
+        # The army itself last changed at 1000; subsequent scenes are deltas.
+        delta = scene(11)
+        delta[6], delta[14] = {}, {}
+        delta[17] = [995, 912, 1015, 931]
+        self.state.packet(1200)
+        self.state.apply(5028, delta, 1200)
+        self.state.verify_connection(connection, 1208)
+        self.assertEqual(len(self.state.snapshot(1211)["alerts"]), 1)
+        quiet = self.state.snapshot(1219)
+        self.assertTrue(quiet["live"])
+        self.assertTrue(quiet["reliable"])
+        self.assertEqual(len(quiet["alerts"]), 1)
+        self.assertEqual(quiet["armies"][0]["observed_at"], 1200)
+        self.assertEqual(quiet["armies"][0]["seen_at"], 1000)
+        self.assertEqual(quiet["armies"][0]["subscription_valid_until"], 1238)
+
+        # Probe results cannot extend an entirely silent capture past 60 seconds.
+        self.state.verify_connection(connection, 1255)
+        self.assertFalse(self.state.snapshot(1261)["live"])
+        self.assertEqual(self.state.snapshot(1261)["alerts"], [])
+
+    def test_subscription_does_not_depend_on_frequent_scene_changes(self):
+        self.hostile()
+        self.state.area[2] = 1015
+        self.state.packet(1020)  # TCP traffic, no scene changes for 20 seconds.
+        data = self.state.snapshot(1021)
+        self.assertTrue(data["reliable"])
+        self.assertEqual(len(data["alerts"]), 1)
+        self.assertEqual(data["armies"][0]["observed_at"], 1000)
+
+    def test_quiet_subscription_stops_on_removal_arrival_gap_or_disconnect(self):
+        self.hostile()
+        self.state.area[2] = 1015
+        self.state.packet(1020)
+        self.assertEqual(len(self.state.snapshot(1021)["alerts"]), 1)
+        self.assertEqual(self.state.snapshot(1101)["alerts"], [])
+        update = scene(11)
+        update[6], update[7], update[14] = {}, ["army"], {}
+        self.state.apply(5028, update, 1022)
+        self.assertEqual(self.state.snapshot(1023)["alerts"], [])
+        self.state.apply(5028, scene(12), 1024)
+        self.state.gap()
+        self.assertEqual(self.state.snapshot(1025)["alerts"], [])
+        self.state.apply(5026, scene(13), 1026)
+        self.assertEqual(len(self.state.snapshot(1027)["alerts"]), 1)
+        self.state.connection("waiting", "disconnected")
+        self.assertEqual(self.state.snapshot(1028)["alerts"], [])
+
+    def test_connection_probe_cannot_validate_another_connection_or_old_cache(self):
+        self.hostile()
+        connection = {"pid": 1, "local_port": 20}
+        self.state.connection("live", "test", connection)
+        self.state.verify_connection({**connection, "local_port": 21}, 1011)
+        self.assertFalse(self.state.snapshot(1012)["live"])
+        self.state.verify_connection(connection, 1011)
+        self.assertTrue(self.state.snapshot(1012)["live"])
+        self.state.connection("waiting", "test")
+        self.state.verify_connection(connection, 1012)
+        self.assertFalse(self.state.snapshot(1013)["live"])
+
     def test_adding_watch_target_preserves_original(self):
         self.state.calibrate({"action": "target_add", "name": "test", "x": 1004, "y": 928})
         self.assertEqual(len(self.state.config["targets"]), 2)
@@ -288,6 +493,19 @@ class ModelTests(unittest.TestCase):
         value[18] = 12
         self.state.apply(5026, value, 1003)
         self.assertFalse(self.state.armies["army"]["visible"])
+
+    def test_only_a_completed_new_baseline_advances_full_scene_time(self):
+        self.assertEqual(self.state.health['last_full_scene_at'], 1000)
+        self.state.gap()
+        self.state.apply(5028, scene(11), 1002)
+        self.assertTrue(self.state.health['resync_required'])
+        self.assertEqual(self.state.health['last_full_scene_at'], 1000)
+        self.state.apply(5026, scene(0), 1003)
+        self.assertTrue(self.state.health['resync_required'])
+        self.assertEqual(self.state.health['last_full_scene_at'], 1000)
+        self.state.apply(5026, scene(12), 1004)
+        self.assertFalse(self.state.health['resync_required'])
+        self.assertEqual(self.state.health['last_full_scene_at'], 1004)
 
 
 class StreamTests(unittest.TestCase):

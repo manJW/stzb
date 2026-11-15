@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from archive import Archive
+from test_support import Archive
 from bridge import ReadOnlyBridge
 from defense import analyze_alert, availability, garrison_arrival, garrison_plans, historical_cases, replay, rule_evidence, summarize
 from defense_model import estimate, validate
@@ -29,7 +29,7 @@ def battle(bid=1, at=300, result=0, *, main=False):
                      else f'{slot},{200000+slot},10;' for slot in range(1, 7))
     return {"battle_id": bid, "time": at, "wid": 5100610, "attack_name": "enemy", "attack_role_id": "enemy-role",
         "attack_unionid": 1008, "attack_idu": "0,11,12,13,0", "attack_all_hero_info": "100701,40,9000,0,0;100807,40,9000,8000,0;100703,40,9000,8000,0;",
-        "defend_name": "ally", "defend_role_id": "ally-role", "defend_unionid": 1909,
+        "defend_name": "ally", "defend_role_id": "ally-role", "defend_unionid": 1009,
         "defend_idu": "0,21,22,23,0", "defend_all_hero_info": "100035,40,9000,8500,0;100707,40,9000,8500,0;100783,40,9000,8500,0;",
         "all_skill_info": skills,
         "npc": 0, "result": result, "attacker_gear_info": "raw-gear-evidence", "weather": 3}
@@ -59,6 +59,68 @@ class IntelligenceTests(unittest.TestCase):
             raise RuntimeError("Unexpected test directory")
         shutil.rmtree(self.folder)
 
+    def test_team_log_filters_and_keeps_battle_association_evidence(self):
+        previous = {**battle(9, 180), 'attack_idu': '9001,11,12,13,0'}
+        fight = {**battle(1, 300), 'attack_idu': '9001,11,12,13,0'}
+        fight['attack_all_hero_info'] = fight['attack_all_hero_info'].replace('100701', '100814')
+        self.archive.ingest(92, [[previous]], 181)
+        self.archive.ingest(5026, world(1), 250)
+        self.archive.ingest(92, [[fight]], 301)
+        self.archive.ingest(2100, {'battle_id': 1, 'report': 'saved battle body'}, 302)
+        intel = self.archive.intelligence
+        filters = dict(player='enemy', army_id='9001', coord='510，610', from_at='200', to_at='300')
+        rows = intel.query('team-log', **filters)['items']
+        self.assertEqual([(r['kind'], r['report_count']) for r in rows], [('march', 1)])
+        result = intel.query('team-log-detail', entry=rows[0]['kind'], id=rows[0]['id'], side=rows[0]['side'])
+        self.assertEqual((result['march']['begin_at'], result['march']['end_at']), (200, 300))
+        self.assertEqual(result['known_at_start']['battle_id'], '9')
+        self.assertEqual([r['battle_id'] for r in result['changes']], ['1', '9'])
+        self.assertEqual([(r['battle_id'], r['association'], r['has_full_report']) for r in result['reports']],
+                         [('1', 'coordinate_time_match', 1)])
+        self.assertEqual({r['side'] for r in result['reports'][0]['sides']}, {'attack', 'defend'})
+        self.assertEqual(intel.query('team-log', **{**filters, 'coord': '511,610'})['items'], [])
+        with self.assertRaises(ValueError):
+            intel.query('team-log', **{**filters, 'from_at': '301'})
+        self.archive.db.execute("UPDATE battle_march_links SET method='ambiguous_marches' WHERE battle_id='1'")
+        rows = intel.query('team-log', **filters)['items']
+        self.assertEqual([r['kind'] for r in rows], ['battle', 'march'])
+        result = intel.query('team-log-detail', entry='march', id=rows[1]['id'])
+        self.assertEqual(result['reports'], [])
+        self.assertEqual(result['possible_reports'][0]['battle_id'], '1')
+
+    def test_team_log_groups_include_unique_arrivals_in_their_army(self):
+        self.archive.ingest(5026, world(aid='9001', end=300), 250)
+        self.archive.ingest(5026, world(aid='9002', end=360), 251)
+        self.archive.ingest(5026, world(aid='9003', uid=201, union=999, end=390), 252)
+        first = {**battle(9, 180), 'attack_idu': '9001,11,12,13,0', 'attack_hero_type': '0,23,23,23'}
+        changed = {**battle(1, 300), 'attack_idu': '9001,11,12,13,0', 'attack_hero_type': '0,23,23,23'}
+        changed['attack_all_hero_info'] = changed['attack_all_hero_info'].replace('100701', '100814')
+        second = {**battle(2, 305), 'attack_idu': '9002,11,12,13,0', 'attack_hero_type': '0,23,23,23'}
+        self.archive.ingest(92, [[first, changed, second, battle(3, 360)]], 370)
+        intel = self.archive.intelligence
+        groups = intel.query('team-log-groups', player='enemy')['items']
+        self.assertEqual({row['union_id']: row['team_count'] for row in groups}, {'1008': 2, '999': 1})
+        self.assertEqual(next(row for row in groups if row['union_id']=='1008')['pending_count'], 0)
+        group = dict(group_name='enemy', group_union='1008', group_identity='')
+        teams = intel.query('team-log-groups', view='teams', **group)['items']
+        self.assertEqual({row['army_id'] for row in teams}, {'9001','9002'})
+        rows = intel.query('team-log-groups', view='events', team='9001', **group)['items']
+        self.assertEqual({row['kind'] for row in rows}, {'battle','march','formation'})
+        self.assertNotIn('2', [row['id'] for row in rows])
+        linked = intel.query('team-log-detail', entry='battle', id='1', side='attack', grouped='1')
+        self.assertEqual(linked['march']['army_id'], '9001')
+        self.assertEqual(linked['reports'][0]['association'], 'coordinate_time_match')
+        change = next(row for row in rows if row['kind']=='formation' and row['outcome']=='lineup')
+        detail = intel.query('team-log-detail', entry='formation', id=change['id'])
+        self.assertEqual(detail['formation']['previous_heroes'][0]['id'], 100701)
+        self.assertEqual(detail['formation']['heroes'][0]['id'], 100814)
+        pending = intel.query('team-log-groups', view='events', team='pending', **group)['items']
+        self.assertEqual(pending, [])
+        detail = intel.query('team-log-detail', entry='battle', id='3', side='attack', grouped='1')
+        self.assertEqual(detail['army_id'],'9002')
+        self.assertEqual(detail['march']['army_id'],'9002')
+        self.assertEqual(detail['inferred_army_id'], '9002')
+
     def test_report_loadout_aligns_attack_and_reverse_defense_slots(self):
         row = battle()
         row.update(attack_advance='0,0,0,0,0,0;0,1,1,0,0,0;3,1,1,0,0,0;5,1,1,0,0,0;',
@@ -76,7 +138,7 @@ class IntelligenceTests(unittest.TestCase):
             self.assertEqual(heroes[0]['gear']['forge_id'], 30408)
             self.assertTrue(heroes[2]['gear_reported'])
             self.assertEqual([(h['troop_code'], h['troop_name']) for h in heroes],
-                             [(23, '骑兵'), (11, '弓兵'), (32, '步兵')])
+                             [(23, '轻骑兵'), (11, '长弓兵'), (32, '禁卫')])
 
     def test_main_matchup_win_rate_uses_main_cases_and_deduplicates_repeated_rounds(self):
         first = battle(1, 300, 0, main=True)
@@ -103,7 +165,7 @@ class IntelligenceTests(unittest.TestCase):
         self.assertEqual((either['items'][1]['own_main'], either['items'][1]['enemy_main']), (True, False))
 
     def test_official_campaign_uses_server_event_blocks_time_and_participants(self):
-        parties = [1008, 'enemy', 0, 0, 0, 0, 1909, 'ally', 0, 0, 0, 0]
+        parties = [1008, 'enemy', 0, 0, 0, 0, 1009, 'ally', 0, 0, 0, 0]
         event = json.dumps({'partake_union':parties, 'belong_block_ids':'51061,52062,'})
         self.archive.ingest(3807, [[139,1,3,5100610,250,350,event]], 300)
         self.archive.ingest(92, [[{**battle(main=True), 'block_id':51061},
@@ -151,6 +213,19 @@ class IntelligenceTests(unittest.TestCase):
                 WHERE battle_id='1' AND side='attack'""")
         attack = next(side for side in self.archive.intelligence.report('1')['sides'] if side['side'] == 'attack')
         self.assertEqual((attack['heroes'][0]['id'], attack['heroes'][0]['name']), (100814, '刘徽'))
+
+    def test_client_catalog_resolves_hero_variants_and_saved_skills_without_filling_slots(self):
+        from combat_loadout import named_hero
+        hero = named_hero({'id': 100841, 'name': '武将#100841', 'red_stars': None,
+                          'skill_slot_ids': [200302, 0, None],
+                          'skills': [{'id': 200302, 'name': '战法#200302', 'level': 7}]})
+        self.assertEqual(hero['name'], '刘秀')
+        self.assertEqual(hero['skills'], [{'id': 200302, 'name': '光武中兴', 'level': 7}])
+        self.assertEqual(hero['skill_slot_ids'], [200302, 0, None])
+        self.assertIsNone(hero['red_stars'])
+        self.assertEqual(named_hero({'id': 130035})['name'], '吕蒙')
+        self.assertEqual(named_hero({'id': 130685})['name'], '乐进')
+        self.assertEqual(named_hero({'id': 9999999})['name'], '武将#9999999')
 
     def test_recent_battles_uses_exact_team_and_report_wounds_with_one_hour_limit(self):
         prior = battle(1, 300)
@@ -209,7 +284,9 @@ class IntelligenceTests(unittest.TestCase):
         self.assertTrue(result['last_army_conflict'])
         self.assertIsNone(result['items'][0]['identity'])
         evidence = result['force_assessment']
-        self.assertEqual((evidence['kind'], evidence['map_hero_count'], evidence['battle_id']), ('spartan', 1, '2'))
+        self.assertEqual((evidence['kind'], evidence['map_hero_count']), ('spartan', 1))
+        self.assertEqual(evidence['source'], 'map_roster')
+        self.assertNotIn('battle_id', evidence, 'A different army report cannot identify the current one-hero army')
 
         mixed = dict(compatible, battle_id=3, time=500, attack_idu='9003,13,0,0,0',
                      attack_all_hero_info='100703,30,2500,500,0;', attack_hp=2500)
@@ -222,7 +299,7 @@ class IntelligenceTests(unittest.TestCase):
         def sample(bid, at, npc=0, hp=100, aid=0):
             row = battle(bid, at)
             row.update(npc=npc, attack_idu=f'{aid},11,12,13,0', attack_hero_type='0,2,2,2,',
-                       attack_hp=3*hp, attack_all_hero_info=f'100701,12,{hp},0,0;100807,12,{hp},0,0;100703,12,{hp},0,0;')
+                       attack_hp=3*hp, attack_all_hero_info=f'100701,40,{hp},0,0;100807,40,{hp},0,0;100703,40,{hp},0,0;')
             return row
 
         self.archive.ingest(92, [[sample(1, 100), sample(2, 100), sample(3, 300, npc=1, hp=900, aid=9002)]], 301)
@@ -254,7 +331,7 @@ class IntelligenceTests(unittest.TestCase):
                 field = side + '_all_hero_info'
                 report[field] = report[field].replace(',9000,', ',5000,').replace(',8000,', ',4000,').replace(',8500,', ',4500,')
             self.archive.ingest(92, [[report]], at + 1)
-        cases = historical_cases(self.archive.db, self.archive.profile_id, '1909', 2000)
+        cases = historical_cases(self.archive.db, self.archive.profile_id, '1009', 2000)
         stat = summarize(cases)
         self.assertEqual((stat['wins'], stat['losses'], stat['draws']), (1, 0, 1))
         self.assertEqual(stat['historical_win_rate'], .5)
@@ -378,8 +455,9 @@ class IntelligenceTests(unittest.TestCase):
         self.assertEqual(early['force_assessment']['kind'], 'unknown')
         result = predict(march, history, 610)
         self.assertEqual((result['force_assessment']['kind'],result['force_assessment']['source'],
-                          result['force_assessment']['battle_id']), ('main','arrival','2'))
-        self.assertEqual((result['items'][0]['battle_id'],result['items'][0]['identity']), ('2','arrival'))
+                          result['force_assessment']['battle_id']), ('main','same_cards','3'))
+        self.assertEqual((result['items'][0]['battle_id'],result['items'][0]['identity']), ('3','same_cards'))
+        self.assertEqual(result['current_report_id'], '3')
         self.assertIsNone(result['same_army_report_id'])
         self.assertFalse(result['last_army_conflict'])
 
@@ -388,6 +466,35 @@ class IntelligenceTests(unittest.TestCase):
         changed = predict(march, player_history(self.archive.db,self.archive.profile_id,'enemy','1008'), 610)
         self.assertTrue(changed['last_army_conflict'])
         self.assertEqual(changed['force_assessment']['kind'], 'unknown')
+
+    def test_partial_arrival_report_does_not_replace_complete_marching_lineup(self):
+        def observe(end, troop_types):
+            scene = world(end=end)
+            scene[6]['9001'][4] = end - 100
+            scene[6]['9001'][16] = troop_types
+            self.archive.ingest(5028, scene, end - 50)
+
+        full_types = '2,21;2,32;3,3;'
+        first = {**battle(1, 300, main=True), 'attack_hero_type':'0,21,32,3,'}
+        partial = {**battle(2, 500, main=True), 'attack_hero_type':'0,21,0,0,',
+                   'attack_all_hero_info':first['attack_all_hero_info'].split(';')[0]+';',
+                   'attack_idu':'0,11,0,0,0'}
+        observe(300, full_types)
+        self.archive.ingest(92, [[first]], 310)
+        observe(500, full_types)
+        self.archive.ingest(92, [[partial]], 510)
+        march = {'id':'9001','owner':'200','state_code':1,'begin':800,'end':900,
+                 'troops':[{'code':21},{'code':32},{'code':3}]}
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        self.assertEqual([link['army_id'] for link in history[1]['2','attack']], ['9001'])
+        assessment = predict(march, history, 810)['force_assessment']
+        self.assertEqual((assessment['kind'], assessment['battle_id']), ('main', '1'))
+
+        observe(700, '2,21;-1,-1;-1,-1;')
+        self.archive.ingest(92, [[{**partial, 'battle_id':3, 'time':700}]], 710)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        assessment = predict(march, history, 810)['force_assessment']
+        self.assertEqual((assessment['kind'], assessment['battle_id']), ('unknown', '3'))
 
     def test_latest_same_army_report_stays_first_when_other_armies_share_troop_codes(self):
         cases = ((1, '9001', 100701), (2, '9001', 100814), (3, '9002', 100814), (4, '9003', 100841))
@@ -407,6 +514,21 @@ class IntelligenceTests(unittest.TestCase):
                          [('2', '9001', 'direct'), ('4', '9003', None), ('3', '9002', None)])
         self.assertEqual(result['items'][0]['heroes'][0]['skills'][1]['level'], 1)
         self.assertEqual(result['items'][2]['heroes'][0]['skills'][1]['level'], 9)
+
+    def test_unverified_newer_template_does_not_override_direct_card_identity(self):
+        exact = '0,21,32,3,'
+        for bid, army, codes in ((1, 9001, exact), (2, 0, exact), (3, 9002, exact), (4, 0, '0,11,32,3,')):
+            report = battle(bid, bid * 100, main=True)
+            report.update(attack_idu=f'{army},11,12,13,0', attack_hero_type=codes,
+                          attack_all_hero_info=report['attack_all_hero_info'].replace('100701', str(100701+bid)))
+            self.archive.ingest(92, [[report]], bid * 100 + 1)
+        march = {'id':'9001', 'owner':'200', 'troops':[{'code':21},{'code':32},{'code':3}], 'begin':500, 'end':600}
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        result = predict(march, history, 550)
+        # These fixtures reuse a physical card number for different templates.
+        # Such an unverified newer record cannot override the directly linked team.
+        self.assertEqual([item['battle_id'] for item in result['items']], ['1', '2', '3'])
+        self.assertEqual((result['lead_loadout']['battle_id'], result['same_army_report_id']), ('1', '1'))
 
     def test_incoming_keeps_only_the_players_available_compatible_reports(self):
         for bid,name,union,code in ((1,'enemy',1008,'0,21,32,3,'),(2,'other',1010,'0,21,32,3,'),
@@ -456,7 +578,7 @@ class IntelligenceTests(unittest.TestCase):
                  'state_code':1,'begin':1000,'end':1200,'from':[500,600],'target':[510,610]}
         samples = (
             (1,100,[40,40,40],5000,3,'main'),
-            (2,200,[40,40,39],5001,3,'standard'),
+            (2,200,[40,40,39],5001,3,'level_below_40'),
             (3,300,[40,40,40],5000,3,'standard'),
             (4,400,[40,40,40],100,3,'low'),
             (5,500,[40,40],100,2,None),
@@ -475,13 +597,13 @@ class IntelligenceTests(unittest.TestCase):
             prediction = predict(march, history, at+2)
             force = prediction['force']
             self.assertEqual(force['priority'] if force else None,expected)
-            self.assertEqual(prediction['force_assessment']['kind'], {'main':'main','low':'spartan'}.get(expected, 'unknown'))
+            self.assertEqual(prediction['force_assessment']['kind'], {'main':'main','low':'spartan','level_below_40':'spartan'}.get(expected, 'unknown'))
             if force:
                 self.assertEqual(force['initial_hp'],sum(counts))
                 self.assertEqual(force['remaining_hp'],150)
             if bid<=3:
                 inferred = predict({**march, 'id':'9002'}, history, at+2)['force_assessment']
-                self.assertEqual(inferred['kind'], 'main' if bid==1 else 'unknown')
+                self.assertEqual(inferred['kind'], 'unknown')
             if bid==4:
                 self.assertEqual(predict(march, history, at+3601)['force']['priority'],'standard')
 
@@ -511,13 +633,281 @@ class IntelligenceTests(unittest.TestCase):
                 self.assertEqual((direct['kind'], direct['confidence'], direct['main_basis']), ('main', 'linked', 'skills'))
                 self.assertEqual(direct['levels'], [40, 40, 40])
                 self.assertEqual(direct['initial_hp'], None if variant == 'unverified_hp' else 3 * hp)
-                self.assertEqual((inferred['kind'], inferred['confidence']), ('main', 'inferred'))
+                self.assertEqual(inferred['kind'], 'unknown')
+            elif variant == 'level_39':
+                self.assertEqual((direct['kind'], direct['spartan_basis'], inferred['kind']),
+                                 ('spartan', 'level_below_40', 'unknown'))
             else:
                 self.assertEqual((direct['kind'], inferred['kind']), ('unknown', 'unknown'))
         stats = self.archive.intelligence.query('main-matchups')
         self.assertEqual(stats['coverage']['reports'], 2)
-        self.assertEqual([row['battle_id'] for row in historical_cases(self.archive.db, self.archive.profile_id, '1909', 6000)],
+        self.assertEqual([row['battle_id'] for row in historical_cases(self.archive.db, self.archive.profile_id, '1009', 6000)],
                          ['3', '4'])
+
+    def test_low_level_and_siege_skills_override_main_and_follow_latest_report(self):
+        march = {'id':'9001','owner':'200','troops':[{'code':21},{'code':32},{'code':3}]}
+        cases = (
+            ('under_40', 'spartan', 'level_below_40'),
+            ('level_40', 'main', None),
+            ('unknown_level', 'unknown', None),
+            ('chongche', 'spartan', 'siege_skill'),
+            ('yunti', 'spartan', 'siege_skill'),
+            ('restored', 'main', None),
+        )
+        for bid, (variant, kind, basis) in enumerate(cases, 1):
+            at = bid * 100
+            report = {**battle(bid, at, main=True), 'attack_idu':'9001,11,12,13,0',
+                      'attack_hero_type':'0,21,32,3,'}
+            if variant == 'under_40':
+                report['attack_all_hero_info'] = report['attack_all_hero_info'].replace(',40,', ',39,', 1)
+            if variant == 'unknown_level':
+                report['attack_all_hero_info'] = report['attack_all_hero_info'].replace(',40,', ',0,', 1)
+            if variant in ('chongche', 'yunti'):
+                skill_id = 200187 if variant == 'chongche' else 200663
+                report['all_skill_info'] = report['all_skill_info'].replace(',200021,1;', f',{skill_id},1;', 1)
+            self.archive.ingest(92, [[report]], at + 1)
+            history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+            force = predict(march, history, at + 2)['force_assessment']
+            self.assertEqual((force['kind'], force['battle_id']), (kind, str(bid)))
+            self.assertEqual(force.get('spartan_basis'), basis)
+            if basis == 'siege_skill':
+                self.assertNotIn(str(bid), [row['battle_id'] for row in
+                    historical_cases(self.archive.db, self.archive.profile_id, '1009', at + 2)])
+
+    def test_unique_personal_low_level_lineup_classifies_without_full_skills(self):
+        report = {**battle(1, 100), 'attack_hero_type':'0,21,32,3,'}
+        report['attack_all_hero_info'] = report['attack_all_hero_info'].replace(',40,', ',39,', 1)
+        self.archive.ingest(92, [[report]], 101)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        march = {'id':'9001','owner':'200','troops':[{'code':21},{'code':32},{'code':3}]}
+        force = predict(march, history, 102)['force_assessment']
+        self.assertEqual((force['kind'], force['spartan_basis']), ('spartan', 'level_below_40'))
+
+    def test_spartan_inference_requires_three_explicit_empty_skill_slots_on_same_army(self):
+        report = battle(1, 100)
+        skills = ''.join(f'{slot},{200000+slot},1,{200010+slot},1,0,0;' for slot in range(1, 4))
+        report.update(attack_idu='9001,11,12,13,0', attack_hero_type='0,21,32,3,', all_skill_info=skills)
+        self.archive.ingest(92, [[report]], 101)
+        march = {'id':'9001', 'owner':'200', 'troops':[{'code':21}, {'code':32}, {'code':3}]}
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        outcome = predict(march, history, 102)['force_assessment']
+        self.assertEqual((outcome['kind'], outcome['confidence'], outcome['spartan_basis']),
+                         ('spartan', 'inferred', 'two_skills_each'))
+        self.assertEqual(predict({**march, 'id':'9002'}, history, 102)['force_assessment']['kind'], 'unknown')
+        aged = predict(march, history, 100 + 97 * 3600)['force_assessment']
+        self.assertEqual((aged['kind'],aged['spartan_basis']),('spartan','two_skills_each'))
+        report['all_skill_info'] = skills.replace(',0,0;', ';', 1)
+        self.archive.ingest(92, [[report]], 103)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        self.assertEqual(predict(march, history, 104)['force_assessment']['kind'], 'unknown')
+
+    def test_spartan_from_single_recent_unbound_candidate_with_explicit_empty_slots(self):
+        def assess(at):
+            history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+            return predict(march, history, at)['force_assessment']
+
+        march = {'id':'9001', 'owner':'200', 'troops':[{'code':21}, {'code':32}, {'code':3}]}
+        slots = ''.join(f'{slot},{200000+slot},1,{200010+slot},1,0,0;' for slot in range(1, 4))
+        report = {**battle(1,100), 'attack_hero_type':'0,21,32,3,', 'all_skill_info':slots.replace(',0,0;', ';', 1)}
+        self.archive.ingest(92, [[report]], 101)
+        self.assertEqual(assess(102)['kind'], 'unknown')
+        self.archive.ingest(92, [[{**report, 'all_skill_info':slots}]], 103)
+        result = assess(104)
+        self.assertEqual((result['kind'], result['confidence'], result['spartan_basis'], result['battle_id']),
+                         ('spartan', 'inferred', 'candidate_two_skills_each', '1'))
+        self.assertEqual(assess(100+49*3600)['kind'], 'unknown')
+        other = {**battle(2,110,main=True), 'attack_hero_type':'0,21,32,3,'}
+        # A second configuration with the same heroes is still conflicting evidence.
+        other['time'] = 99
+        self.archive.ingest(92, [[other]], 111)
+        self.assertEqual(assess(112)['kind'], 'unknown')
+
+    def test_newer_matched_arrival_with_one_empty_slot_supersedes_old_direct_report(self):
+        previous = {**battle(1, 100, main=True), 'attack_idu':'9001,11,12,13,0',
+                    'attack_hero_type':'0,21,32,3,'}
+        self.archive.ingest(92, [[previous]], 110)
+        scene = world()
+        scene[6]['9001'][16] = '2,21;2,32;3,3;'
+        self.archive.ingest(5028, scene, 250)
+        latest = {**battle(2, 300, main=True), 'attack_hero_type':'0,21,32,3,',
+                  'attack_all_hero_info':'100701,40,329,0,0;100807,40,456,0,0;100703,40,100,0,0;'}
+        latest['all_skill_info'] = latest['all_skill_info'].replace(',200021,1;', ',0,0;', 1)
+        self.archive.ingest(92, [[latest]], 310)
+        march = {'id':'9001','owner':'200','state_code':1,'begin':400,'end':500,
+                 'troops':[{'code':21},{'code':32},{'code':3}]}
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        result = predict(march, history, 410)
+        force = result['force_assessment']
+        self.assertEqual((force['kind'], force['battle_id'], force['source']), ('spartan', '2', 'arrival'))
+        self.assertEqual(force['spartan_basis'], 'empty_skill_slots')
+        self.assertEqual((result['items'][0]['battle_id'], result['force']['battle_id']), ('2', '2'))
+
+        incomplete = {**latest, 'all_skill_info':latest['all_skill_info'].replace(',0,0;', ';', 1)}
+        self.archive.ingest(92, [[incomplete]], 320)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        force = predict(march, history, 410)['force_assessment']
+        self.assertEqual((force['kind'], force['battle_id']), ('unknown', '2'))
+
+        restored = {**previous, 'battle_id':3, 'time':350}
+        self.archive.ingest(92, [[restored]], 360)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        force = predict(march, history, 410)['force_assessment']
+        self.assertEqual((force['kind'], force['battle_id'], force['source']), ('main', '3', 'direct'))
+
+    def test_unique_unbound_lineup_with_one_explicit_empty_slot_is_spartan(self):
+        report = {**battle(1, 100, main=True), 'attack_hero_type':'0,21,32,3,'}
+        report['all_skill_info'] = report['all_skill_info'].replace(',200021,1;', ',0,0;', 1)
+        self.archive.ingest(92, [[report]], 110)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        march = {'id':'9001','owner':'200','troops':[{'code':21},{'code':32},{'code':3}]}
+        force = predict(march, history, 120)['force_assessment']
+        self.assertEqual((force['kind'], force['spartan_basis']), ('spartan', 'candidate_empty_skill_slots'))
+
+    def test_latest_downgrade_changes_live_force_but_keeps_historical_main_samples(self):
+        march = {'id':'9001', 'owner':'200', 'troops':[{'code':21}, {'code':32}, {'code':3}], 'begin':900, 'end':1100}
+        def report(bid, at, result):
+            row = battle(bid, at, result, main=True)
+            row.update(attack_idu='9001,11,12,13,0', attack_hero_type='0,21,32,3,')
+            return row
+
+        win, loss = report(1, 100, 1), report(9, 800, 0)
+        self.archive.ingest(92, [[win, loss]], 820)
+        baseline = self.archive.intelligence.query('main-matchups', relation='all')
+        self.assertEqual(baseline['coverage']['samples'], 2)
+        lowered = report(10, 800, 0)
+        lowered['all_skill_info'] = lowered['all_skill_info'].replace('1,200001,10,200011,1,200021,1;', '1,200001,1,200011,1,0,0;')
+        self.archive.ingest(92, [[lowered]], 810)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        incoming = predict(march, history, 950)
+        self.assertEqual(incoming['same_army_report_id'], '10')
+        force = incoming['force_assessment']
+        self.assertEqual((force['kind'], force['spartan_basis'], force['previous_main_battle_id'], force['removed_skill_slots']),
+                         ('spartan', 'downgraded_main', '9', 1))
+        self.assertEqual(self.archive.intelligence.query('main-matchups', relation='all'), baseline)
+
+        incomplete = report(11, 850, 0)
+        incomplete['all_skill_info'] = ''
+        self.archive.ingest(92, [[incomplete]], 860)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        latest = predict(march, history, 950)['force_assessment']
+        self.assertEqual((latest['kind'], latest['review_state'], latest['battle_id']), ('unknown', 'linked_report', '11'))
+        empty = report(12, 875, 0)
+        empty['attack_all_hero_info'] = ''
+        self.archive.ingest(92, [[empty]], 880)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        latest = predict(march, history, 950)['force_assessment']
+        self.assertEqual((latest['kind'], latest['review_state'], latest['battle_id']), ('unknown', 'linked_report', '12'))
+
+    def test_unique_personal_main_stays_usable_after_five_days(self):
+        report = battle(1, 100, main=True)
+        report['attack_hero_type'] = '0,21,32,3,'
+        self.archive.ingest(92, [[report]], 101)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        march = {'id':'9001', 'owner':'200', 'troops':[{'code':21}, {'code':32}, {'code':3}]}
+        force = predict(march, history, 200)['force_assessment']
+        self.assertEqual((force['kind'], force['confidence']), ('main', 'inferred'))
+        limit = 100 + 5 * 24 * 3600
+        self.assertEqual(predict(march, history, limit)['force_assessment']['kind'], 'main')
+        aged = predict(march, history, limit + 1)['force_assessment']
+        self.assertEqual((aged['kind'], aged['battle_id']), ('main', '1'))
+
+        newer_at = limit + 120
+        downgraded = {**battle(2, newer_at), 'attack_hero_type':report['attack_hero_type']}
+        self.archive.ingest(92, [[downgraded]], newer_at + 1)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        current = predict(march, history, newer_at + 2)['force_assessment']
+        self.assertEqual((current['kind'], current['battle_id']), ('unknown', '2'))
+
+    def test_multiple_expired_formations_with_same_troops_stay_unknown(self):
+        report = {**battle(1, 100, main=True), 'attack_hero_type':'0,21,32,3,'}
+        other = {**report, 'battle_id':2, 'time':150,
+                 'attack_all_hero_info':report['attack_all_hero_info'].replace('100701','100814')}
+        self.archive.ingest(92, [[report, other]], 200)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        march = {'id':'9001', 'owner':'200', 'troops':[{'code':21}, {'code':32}, {'code':3}]}
+        self.assertEqual(predict(march, history, 151 + 5 * 24 * 3600)['force_assessment']['kind'], 'unknown')
+
+    def test_incomplete_skill_slots_keep_a_reference_and_explicit_empty_slots_can_downgrade(self):
+        march = {'id':'9001', 'owner':'200', 'troops':[{'code':21}, {'code':32}, {'code':3}], 'begin':500, 'end':600}
+        original = battle(1, 100, main=True)
+        original.update(attack_idu='9001,11,12,13,0', attack_hero_type='0,21,32,3,')
+        self.archive.ingest(92, [[original]], 101)
+        incomplete = {**original, 'battle_id':2, 'time':200,
+                      'all_skill_info':original['all_skill_info'].replace(',200021,1;', ';', 1)}
+        self.archive.ingest(92, [[incomplete]], 201)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        result = predict(march, history, 202)
+        self.assertEqual(result['items'][0]['heroes'][0]['skill_slot_ids'], [200001, 200011, None])
+        self.assertEqual(result['force_assessment']['kind'], 'unknown')
+        self.assertEqual(result['force_assessment']['prior_main_hint']['battle_id'], '1')
+        self.assertNotIn('skill_slots_verified', result['lead_loadout']['heroes'][0])
+        self.assertTrue(result['lead_loadout']['heroes'][1]['skill_slots_verified'])
+
+        explicit = {**original, 'battle_id':3, 'time':300, 'all_skill_info':original['all_skill_info']}
+        for skill in (200021, 200022, 200023):
+            explicit['all_skill_info'] = explicit['all_skill_info'].replace(f',{skill},1;', ',0,0;', 1)
+        self.archive.ingest(92, [[explicit]], 301)
+        history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+        result = predict(march, history, 302)
+        self.assertEqual(result['items'][0]['heroes'][0]['skill_slot_ids'], [200001, 200011, 0])
+        self.assertEqual((result['force_assessment']['kind'], result['force_assessment']['spartan_basis']),
+                         ('spartan', 'two_skills_each'))
+        self.assertNotIn('prior_main_hint', result['force_assessment'])
+        self.assertEqual(self.archive.intelligence.report('3')['sides'][1]['heroes'][0]['skill_slot_ids'],
+                         [200006, 200016, 200026])
+
+    def test_main_report_gaps_counts_first_forecasts_once_and_prefers_recent_missing_body(self):
+        profile = self.archive.profile_id
+        intel = self.archive.intelligence
+        for bid, aid, uid, name in ((1, '9001', 200, 'enemy'), (2, '9002', 200, 'enemy'),
+                                    (3, '9003', 201, 'another-enemy')):
+            end = 200 + bid * 100
+            scene = world(aid=aid, uid=uid, name=name, end=end)
+            scene[6][aid][4] = end - 100
+            scene[6][aid][16] = '2,21;2,32;3,3;'
+            self.archive.ingest(5028, scene, end - 50)
+            march = {'id':aid,'state_code':1,'from':[500,600],'target':[510,610],'begin':end-100,'end':end}
+            with self.archive.db:
+                for at, kind in ((end-40, 'unknown'), (end-20, 'main')):
+                    record_forecast(self.archive.db, profile, march, {'items':[], 'troop_codes':[21,32,3],
+                                    'ambiguous':False, 'force_assessment':{'kind':kind}}, at)
+            actual = battle(bid, end, main=True)
+            actual.update(attack_name=name, attack_role_id=name, attack_idu=f'{aid},11,12,13,0',
+                          attack_hero_type='0,21,32,3,')
+            self.archive.ingest(92, [[actual]], end+1)
+        latest = battle(9, 700, main=True)
+        latest.update(attack_role_id='enemy', attack_hero_type='0,21,32,3,')
+        self.archive.ingest(92, [[latest]], 701)
+        result = intel.query('main-report-gaps')
+        self.assertEqual(result['missed_marches'], 3)
+        self.assertEqual([(r['battle_id'], r['missed_marches']) for r in result['items']], [('9', 2), ('3', 1)])
+        self.archive.ingest(92, [[{'battle_id':9, 'report':'full report'}]], 702)
+        self.assertEqual(intel.query('main-report-gaps', limit='1')['items'][0]['battle_id'], '2')
+
+    def test_newer_personal_main_can_outweigh_a_conflicting_army_number(self):
+        march = {'id':'9001', 'owner':'200', 'troops':[{'code':21}, {'code':32}, {'code':3}],
+                 'begin':500, 'end':600}
+        cases = (
+            ('0', '0,21,32,3,', True, 'main'),
+            ('9001', '0,3,3,3,', True, 'unknown'),
+            ('9002', '0,21,32,3,', True, 'unknown'),
+            ('0', '0,21,32,3,', True, 'main'),
+            ('0', '0,21,32,3,', False, 'unknown'),
+        )
+        for bid, (army_id, codes, main, expected) in enumerate(cases, 1):
+            with self.subTest(report=bid):
+                at = bid * 80
+                report = battle(bid, at, main=main)
+                report.update(attack_idu=f'{army_id},11,12,13,0', attack_hero_type=codes,
+                              attack_all_hero_info=report['attack_all_hero_info'].replace('100701', str(100701+bid)))
+                self.archive.ingest(92, [[report]], at + 1)
+                history = player_history(self.archive.db, self.archive.profile_id, 'enemy', '1008')
+                result = predict(march, history, at + 2)
+                self.assertEqual(result['force_assessment']['kind'], expected)
+                if bid == 4:
+                    self.assertEqual(result['force_assessment']['battle_id'], '4')
+                    self.assertEqual(result['force_assessment']['confidence'], 'inferred')
+                    self.assertEqual(result['lineup_confidence'], 'uncertain')
 
     def test_report_review_uses_saved_forecast_for_exact_march(self):
         self.archive.ingest(5028, world(), 250)
@@ -564,7 +954,11 @@ class IntelligenceTests(unittest.TestCase):
                   'all_skill_info':before['all_skill_info'].replace('200011,1','200011,9').replace('200012,1','200099,1')
                       .replace('200023,1','0,0')}
         self.archive.ingest(92, [[actual]], 301)
-        audit = self.archive.intelligence.report(2)['lineup_review']['same_army_audit']
+        review = self.archive.intelligence.report(2)['lineup_review']
+        audit = review['same_army_audit']
+        self.assertTrue(all(slot['match'] for slot in review['troop_audit']))
+        self.assertEqual(review['lead_audit']['positions'][2]['skills']['status'], 'mismatch')
+        self.assertEqual(review['lead_audit']['fields']['troop'], 'match')
         self.assertEqual((audit['army_id'], audit['method'], audit['last']['source_battle_id']),
                          ('9001', 'coordinate_time_match', '1'))
         comparison = audit['last']
@@ -796,12 +1190,21 @@ class IntelligenceTests(unittest.TestCase):
         def exchange(text):
             sent.append(text);return "OK:sent cmd="+text.split()[1]
         b=ReadOnlyBridge(exchange);b.fetch_profiles([1,2]);b.fetch_battle_detail(1)
-        self.assertEqual(sent,["__net_send 10 [[1,2],0,0]","__net_send 6231 [1,1,0]"])
+        self.assertEqual(sent,["__net_send 10 [[1,2],0,0]","__net_send 11 [1,0,0]"])
         for ids in ([True],[],list(range(1,17))):
             with self.assertRaises(ValueError):b.fetch_profiles(ids)
         raw=[0]*33;raw[31]="1,1,1,1,1,0;malformed;2,-1,1,1,1,0;"
         self.assertEqual(report_references(raw),[[1,1,1,1,1,0]])
         lo,hi=wilson(0,30);self.assertEqual(lo,0);self.assertLess(hi,.12)
+
+    def test_full_union_command11_and_compact6231_are_separate(self):
+        self.archive.ingest(92, [[battle()]], 300)
+        self.archive.ingest(6231, [0, {'battle_id':1,'brief_report':'compact'}, 0], 310)
+        self.assertIsNone(self.archive.intelligence.report(1)['full_report'])
+        self.archive.ingest(11, [0, {'battle_id':1,'report':'complete text'}, 0], 311)
+        report=self.archive.intelligence.report(1)
+        self.assertEqual(report['full_report']['body'],'complete text')
+        self.assertEqual(report['brief_report']['body'],'compact')
 
     def test_continuous_reader_waits_for_new_data_and_cools_down_without_stopping(self):
         reader=ReportEvidenceReader(self.archive,SimpleNamespace(),lambda:None,False)
@@ -868,6 +1271,18 @@ class IntelligenceTests(unittest.TestCase):
                 self.assertEqual(target.parent,self.folder.parent/"Exports")
                 self.assertEqual(payload["items"][0]["battle_id"],"1")
         reader.close()
+
+    def test_lineup_audit_status_cannot_expose_a_different_profile(self):
+        path=self.folder/'runtime'/'lineup-consistency.json'
+        path.parent.mkdir(exist_ok=True)
+        with self.http_service() as request:
+            self.assertEqual(json.loads(request('GET','/api/intel/lineup-audit')[1])['checked_armies'],0)
+            path.write_text(json.dumps({'profile_id':'other-profile','checked_armies':999}),encoding='utf-8')
+            self.assertEqual(json.loads(request('GET','/api/intel/lineup-audit')[1])['checked_armies'],0)
+            path.write_text(json.dumps({'profile_id':self.archive.profile_id,'checked_armies':3,
+                                        'running':False,'problem_armies':0,'issues':[]}),encoding='utf-8')
+            result=json.loads(request('GET','/api/intel/lineup-audit')[1])
+            self.assertEqual((result['checked_armies'],result['running']),(3,False))
 
 
 if __name__=="__main__":unittest.main()

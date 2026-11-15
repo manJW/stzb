@@ -14,14 +14,14 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from archive import Archive
+from test_support import Archive
 from bridge import ReadOnlyBridge, union_report_request, _exchange
 from collector import Collector, MessageFramer
 from harvest import BattleHarvester
 from server import ThreadingHTTPServer, make_handler
 
 
-def page(*ids, union=1909):
+def page(*ids, union=1009):
     return [[{"battle_id": bid, "attack_name": "sample", "attack_unionid": union,
         "defend_unionid": 1008}] for bid in ids]
 

@@ -10,7 +10,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 
 from observation_codec import dictionaries, digest, number, packed
 from collector import Collector
-from share_protocol import MAP_IDS, MAX_AGE, MAX_BYTES, MAX_EVENTS, REPORT_IDS, VERSION, endpoint, project_body, project_player, project_report, project_scene
+from share_protocol import BODY_IDS, MAP_IDS, MAX_AGE, MAX_BYTES, MAX_EVENTS, REPORT_IDS, VERSION, endpoint, project_body, project_player, project_report, project_scene
 
 ROOT = Path(__file__).resolve().parent
 
@@ -183,11 +183,11 @@ class MemberCollector(Collector):
             return
         events = []
         for row in dictionaries(value):
-            record = project_body(row) if mid == 6231 else project_report(row, self.union_id)
+            record = project_body(row) if mid in BODY_IDS else project_report(row, self.union_id)
             if not record:
                 continue
             bid = record["battle_id"]
-            if mid == 6231:
+            if mid in BODY_IDS:
                 if bid not in self.report_ids:
                     continue
             else:

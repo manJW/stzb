@@ -9,8 +9,9 @@ from archive import digest, integers, number, packed
 from combat_loadout import SKILLS, named_hero, side_heroes
 from lineup_prediction import archived_march_key, meets_main_threshold, review_report, troop_total
 from model import write_json
-from observation_codec import troop_families
+from observation_codec import coord, map_troop_codes, report_has_npc, report_system_npc, report_troop_codes, troop_families
 from official_campaigns import campaigns_from_messages, in_campaign, map_block, report_campaign
+from season_seed import CAMPAIGN_SCHEMA
 
 # Decompiled from the installed PC client's Tenth.Data.ReportResult (2026-11-05 snapshot).
 RESULTS = {0: ("战败", "loss"), 1: ("胜利", "win"), 2: ("个人占领", "win"),
@@ -48,6 +49,8 @@ def wilson(wins, total):
 class Intelligence:
     def __init__(self, archive):
         self.archive, self.db = archive, archive.db
+        self.analysis_cache = collections.OrderedDict()
+        self.db.execute(CAMPAIGN_SCHEMA)
         self.db.executescript('''
         CREATE TABLE IF NOT EXISTS army_report_refs(
           id TEXT PRIMARY KEY,profile_id TEXT NOT NULL,army_id TEXT NOT NULL,battle_id TEXT NOT NULL,
@@ -62,15 +65,19 @@ class Intelligence:
           observed_at REAL NOT NULL,message_ref TEXT,PRIMARY KEY(profile_id,battle_id,side));
         CREATE INDEX IF NOT EXISTS combat_player ON combat_sides(profile_id,union_id,player_name,event_at);
         CREATE INDEX IF NOT EXISTS combat_army ON combat_sides(profile_id,army_id,event_at);
+        CREATE INDEX IF NOT EXISTS combat_pvp_alliance_time ON combat_sides(profile_id,union_id,event_at,battle_id)
+          WHERE npc=0 AND outcome IN ('win','loss','draw') AND event_at>0;
         CREATE INDEX IF NOT EXISTS combat_arrival ON combat_sides(profile_id,side,wid,event_at);
         CREATE INDEX IF NOT EXISTS message_kind ON messages(profile_id,message_id,first_seen);
         CREATE INDEX IF NOT EXISTS march_arrival ON march_samples(profile_id,state_code,to_x,to_y,end_at);
         CREATE INDEX IF NOT EXISTS march_army_end ON march_samples(profile_id,army_id,end_at);
+        CREATE INDEX IF NOT EXISTS army_state_for_march ON army_states(profile_id,army_id,begin_at,end_at,observed_at);
         CREATE TABLE IF NOT EXISTS battle_march_links(
           profile_id TEXT NOT NULL,battle_id TEXT NOT NULL,side TEXT NOT NULL,march_id TEXT NOT NULL,
           method TEXT NOT NULL,arrival_difference REAL NOT NULL,
           PRIMARY KEY(profile_id,battle_id,side,march_id));
         CREATE INDEX IF NOT EXISTS battle_march_by_march ON battle_march_links(profile_id,march_id,method,battle_id,side);
+        CREATE INDEX IF NOT EXISTS battle_march_by_report ON battle_march_links(profile_id,battle_id,side,method,march_id);
         CREATE TABLE IF NOT EXISTS same_army_audits(
           profile_id TEXT NOT NULL,battle_id TEXT NOT NULL,data TEXT NOT NULL,
           PRIMARY KEY(profile_id,battle_id));
@@ -83,6 +90,9 @@ class Intelligence:
         ''')
         if "priority" not in {r[1] for r in self.db.execute("PRAGMA table_info(report_read_jobs)")}:
             self.db.execute("ALTER TABLE report_read_jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
+        self.db.execute("""CREATE INDEX IF NOT EXISTS report_jobs_ready ON report_read_jobs
+            (profile_id,priority DESC,CASE kind WHEN 'profile' THEN 0 ELSE 1 END,
+             CAST(battle_id AS INTEGER) DESC,queued_at) WHERE state='queued'""")
         self.db.commit()
 
     @property
@@ -90,6 +100,7 @@ class Intelligence:
         return self.archive.profile_id
 
     def observe_army(self, aid, raw, at, message_ref, state_ref=None):
+        import reported_archive
         references = report_references(raw)
         if not references:
             return set()
@@ -98,12 +109,17 @@ class Intelligence:
         affected = set()
         for reference in references:
             bid = str(reference[0])
+            import retention
+            if retention.ignored(self.archive,bid):
+                continue
             ident = digest([self.profile_id, str(aid), bid, str(raw[1]), owner["name"] if owner else None,
                 owner["union_id"] if owner else None, reference])
-            inserted = self.db.execute("INSERT OR IGNORE INTO army_report_refs VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            target=reported_archive.storage(self.db,self.profile_id,aid,'army_report_refs')
+            inserted = self.db.execute(f"INSERT OR IGNORE INTO {target} VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (ident, self.profile_id, str(aid), bid, str(raw[1]), owner["name"] if owner else None,
                  owner["union_id"] if owner else None, packed(reference), at, state_ref, message_ref)).rowcount
             if inserted:
+                self.db.execute('INSERT OR IGNORE INTO report_collection_state VALUES(?,?,0,0)',(self.profile_id,bid))
                 affected.add(bid)
                 if not self.db.execute("SELECT 1 FROM battle_reports WHERE profile_id=? AND battle_id=?", (self.profile_id, bid)).fetchone():
                     self.queue_evidence("profile", bid, at)
@@ -114,7 +130,7 @@ class Intelligence:
         other = "defend" if side == "attack" else "attack"
         if not name or (name == battle.get(other + "_name") and union == str(battle.get(other + "_unionid"))):
             return None
-        rows = self.db.execute('''SELECT * FROM army_report_refs WHERE profile_id=? AND battle_id=?
+        rows = self.db.execute('''SELECT * FROM live_army_report_refs WHERE profile_id=? AND battle_id=?
             AND owner_name=? AND union_id=? ORDER BY observed_at''',
             (self.profile_id, str(battle["battle_id"]), name, union)).fetchall()
         if not rows or len({r["army_id"] for r in rows}) != 1:
@@ -126,7 +142,7 @@ class Intelligence:
             "raw_reference": json.loads(row["raw_reference"])}
 
     def retire_conflicts(self, battle, side):
-        aids = self.db.execute('''SELECT DISTINCT army_id FROM army_report_refs WHERE profile_id=?
+        aids = self.db.execute('''SELECT DISTINCT army_id FROM live_army_report_refs WHERE profile_id=?
             AND battle_id=? AND owner_name=? AND union_id=?''',
             (self.profile_id, str(battle["battle_id"]), str(battle.get(side+"_name", "")), str(battle.get(side+"_unionid", "0")))).fetchall()
         if len(aids) < 2:
@@ -187,6 +203,7 @@ class Intelligence:
         return side_heroes(heroes, side, battle)
 
     def battle(self, battle, at, message_ref):
+        self.analysis_cache.clear()
         bid, event_at, wid = str(battle["battle_id"]), number(battle.get("time")), number(battle.get("wid"))
         result_code = number(battle.get("result"), -1)
         attack_outcome = RESULTS.get(result_code, ("特殊结果待解释", "unknown"))[1]
@@ -194,6 +211,7 @@ class Intelligence:
         alliance = own not in ("", "0") and own in (str(battle.get("attack_unionid")), str(battle.get("defend_unionid")))
         needs_detail = alliance
         main_sides = 0
+        npc = 1 if report_has_npc(battle) else int(bool(number(battle['npc']))) if 'npc' in battle else -1
         for side in ("attack", "defend"):
             name = str(battle.get(side + "_name", ""))
             if not name:
@@ -206,6 +224,9 @@ class Intelligence:
             proof = self.archive._report_army_link(battle, side, heroes) if not aid else None
             if proof:
                 aid = proof["army_id"]
+            if aid and not report_system_npc(battle,side):
+                import reported_archive
+                reported_archive.promote(self.db,self.profile_id,aid,bid,at)
             union = str(battle.get(side + "_unionid", "0"))
             outcome = attack_outcome if side == "attack" else OPPOSITE[attack_outcome]
             features = {k: v for k, v in battle.items() if k.startswith(side + "_") or k.startswith(side + "er_") or
@@ -220,13 +241,13 @@ class Intelligence:
                 features=excluded.features,observed_at=MAX(combat_sides.observed_at,excluded.observed_at),message_ref=excluded.message_ref''',
                 (self.profile_id, bid, side, "battle:" + str(battle.get(side + "_role_id") or name), name,
                  union, aid, "exact_army_id" if aid else "unbound_formation",
-                 event_at, wid, result_code, outcome, int(bool(number(battle["npc"]))) if "npc" in battle else -1,
+                 event_at, wid, result_code, outcome, npc,
                  ",".join(str(h["id"]) for h in heroes), troops,
                  packed(heroes), packed(features), at, message_ref))
-            self.link_marches(bid, side, aid, wid, event_at, name, union)
+            if not report_system_npc(battle,side):self.link_marches(bid, side, aid, wid, event_at, name, union)
             needs_detail = needs_detail or bool(aid)
         if needs_detail:
-            priority = MAIN_DETAIL_PRIORITY if alliance and main_sides == 2 and "npc" in battle and not number(battle["npc"]) else 0
+            priority = MAIN_DETAIL_PRIORITY if alliance and main_sides == 2 and npc == 0 else 0
             self.queue_evidence("detail", bid, at, priority=priority)
 
     def alliance_report_params(self):
@@ -239,16 +260,19 @@ class Intelligence:
             FROM battle_reports b WHERE b.profile_id=:profile_id AND :union_id NOT IN ('','0') AND {ALLIANCE_REPORT}
             AND NOT EXISTS(SELECT 1 FROM report_bodies f WHERE f.profile_id=b.profile_id AND f.battle_id=b.battle_id)""",
             self.alliance_report_params()).rowcount
-        candidates = self.db.execute("""SELECT j.battle_id,j.priority,a.heroes,b.heroes AS opposing_heroes
-            FROM report_read_jobs j
-            JOIN combat_sides a ON a.profile_id=j.profile_id AND a.battle_id=j.battle_id AND a.side='attack'
-            JOIN combat_sides b ON b.profile_id=j.profile_id AND b.battle_id=j.battle_id AND b.side='defend'
-            WHERE j.profile_id=:profile_id AND j.kind='detail' AND j.state='queued' AND j.priority<=:main_priority
-            AND :union_id NOT IN ('','0') AND (a.union_id=:union_id OR b.union_id=:union_id)
-            AND a.npc=0 AND b.npc=0""", {**self.alliance_report_params(), "main_priority": MAIN_DETAIL_PRIORITY})
+        candidates = self.db.execute("""SELECT battle_id,priority FROM report_read_jobs
+            WHERE profile_id=? AND kind='detail' AND state='queued' AND priority<=?""",
+            (self.profile_id, MAIN_DETAIL_PRIORITY)).fetchall()
         updates = []
         for row in candidates:
-            teams = [json.loads(row[field]) for field in ("heroes", "opposing_heroes")]
+            # Point lookups keep the composite PK usable; large cross joins can
+            # choose a player/time index and make service startup take minutes.
+            sides = self.db.execute("""SELECT union_id,npc,heroes FROM combat_sides
+                WHERE profile_id=? AND battle_id=?""", (self.profile_id, row["battle_id"])).fetchall()
+            if (len(sides) != 2 or any(side['npc'] for side in sides)
+                    or str(self.archive.profile['union_id']) not in {side['union_id'] for side in sides}):
+                continue
+            teams = [json.loads(side['heroes']) for side in sides]
             priority = MAIN_DETAIL_PRIORITY if all(meets_main_threshold(heroes) for heroes in teams) else 60 if row["priority"] == 60 else 0
             if priority != row["priority"]:
                 updates.append((priority, self.profile_id, row["battle_id"]))
@@ -263,6 +287,67 @@ class Intelligence:
             WHERE b.profile_id=:profile_id AND :union_id NOT IN ('','0') AND {ALLIANCE_REPORT}""",
             self.alliance_report_params()).fetchone())
 
+    def main_report_gaps(self):
+        own = str(self.archive.profile['union_id'])
+        enemies = self.unions({'union_id': '', 'relation': 'enemy'})
+        if own in ('', '0'):
+            return {'items': [], 'missed_marches': 0}
+        rows = self.db.execute('''SELECT m.*,c.player_key,c.player_name,c.union_id,c.hero_key,c.heroes,c.event_at,
+              json_extract(c.features,'$.attack_hero_type') AS report_troops,
+              CAST(json_extract(c.features,'$.attacker_force') AS INTEGER) AS force_type
+            FROM battle_march_links l JOIN march_samples m ON m.profile_id=l.profile_id AND m.id=l.march_id
+            JOIN combat_sides c ON c.profile_id=l.profile_id AND c.battle_id=l.battle_id AND c.side=l.side
+            WHERE l.profile_id=? AND l.side='attack' AND c.npc=0 AND c.hero_key<>''
+            AND m.observed_at<m.end_at AND c.event_at>=m.observed_at AND c.observed_at>m.observed_at
+            AND (l.method='unique_attack_arrival' OR (l.method='coordinate_time_match' AND c.army_id=m.army_id))
+            ORDER BY c.event_at,c.initial_hp DESC,CAST(c.battle_id AS INTEGER)''', (self.profile_id,))
+        outcomes = collections.defaultdict(list)
+        march_fields = ('army_id', 'begin_at', 'from_x', 'from_y', 'to_x', 'to_y')
+        for row in rows:
+            codes = map_troop_codes(row['hero_type'])
+            if (self.scope_matches({'union_id':'','relation':'enemy'},enemies,row['union_id'],row['force_type'])
+                    and len(codes) == 3 and all(codes)
+                    and codes == report_troop_codes(row['report_troops'], 'attack')):
+                outcomes[tuple(row[field] for field in march_fields)].append((row, codes))
+        misses = collections.defaultdict(collections.Counter)
+        for rounds in outcomes.values():
+            if len({(r['player_key'], r['union_id'], r['hero_key']) for r, _ in rounds}) != 1:
+                continue
+            row, codes = rounds[0]
+            if not meets_main_threshold(json.loads(row['heroes'])):
+                continue
+            first = None
+            cutoffs = {archived_march_key(self.profile_id, march): min(row['event_at'], march['end_at'])
+                       for march, _ in rounds}
+            for key, cutoff in cutoffs.items():
+                saved = self.db.execute('''SELECT issued_at,json_extract(data,'$.force_assessment.kind') AS kind
+                    FROM lineup_forecasts WHERE profile_id=? AND march_key=? AND issued_at<?
+                    ORDER BY issued_at LIMIT 1''', (self.profile_id, key, cutoff)).fetchone()
+                if saved and (first is None or saved['issued_at'] < first['issued_at']):
+                    first = saved
+            if first and first['kind'] in ('unknown', 'spartan'):
+                misses[(row['player_key'], row['player_name'], row['union_id'])][codes] += 1
+        items = []
+        for (player, name, union), patterns in misses.items():
+            reports = self.db.execute('''SELECT c.battle_id,c.side,c.event_at,c.wid,c.hero_key,p.player_name AS opponent,
+                  json_extract(c.features,'$.'||c.side||'_hero_type') AS troop_raw
+                FROM combat_sides c JOIN combat_sides p ON p.profile_id=c.profile_id AND p.battle_id=c.battle_id AND p.side<>c.side
+                WHERE c.profile_id=? AND c.union_id=? AND c.player_name=? AND c.player_key=? AND p.union_id=?
+                AND c.npc=0 AND c.hero_key<>'' AND NOT EXISTS (
+                    SELECT 1 FROM report_bodies f WHERE f.profile_id=c.profile_id AND f.battle_id=c.battle_id)
+                ORDER BY c.event_at DESC,CAST(c.battle_id AS INTEGER) DESC''', (self.profile_id, union, name, player, own))
+            for report in reports:
+                codes = report_troop_codes(report['troop_raw'], report['side'])
+                if codes not in patterns:
+                    continue
+                items.append({'battle_id': report['battle_id'], 'player_name': name, 'opponent': report['opponent'],
+                              'union_id': union, 'event_at': report['event_at'], 'side': report['side'],
+                              'coord': coord(report['wid']), 'troop_codes': codes, 'missed_marches': sum(patterns.values()),
+                              'pattern_misses': patterns[codes]})
+                break
+        items.sort(key=lambda item: (item['missed_marches'], item['event_at'], int(item['battle_id'])), reverse=True)
+        return {'items': items, 'missed_marches': sum(sum(patterns.values()) for patterns in misses.values())}
+
     def queue_evidence(self, kind, bid, at=None, retry=False, priority=0):
         if kind not in ("profile", "detail") or not str(bid).isdigit() or not 0 < int(bid) <= 9223372036854775807:
             raise ValueError("战报读取参数无效")
@@ -270,7 +355,7 @@ class Intelligence:
         table = "battle_reports" if kind == "profile" else "report_bodies"
         if self.db.execute(f"SELECT 1 FROM {table} WHERE profile_id=? AND battle_id=?", (self.profile_id, bid)).fetchone():
             return False
-        known = self.db.execute("SELECT 1 FROM battle_reports WHERE profile_id=? AND battle_id=? UNION SELECT 1 FROM army_report_refs WHERE profile_id=? AND battle_id=? LIMIT 1",
+        known = self.db.execute("SELECT 1 FROM battle_reports WHERE profile_id=? AND battle_id=? UNION SELECT 1 FROM live_army_report_refs WHERE profile_id=? AND battle_id=? LIMIT 1",
             (self.profile_id, bid, self.profile_id, bid)).fetchone()
         if not known:
             raise ValueError("只能读取当前档案已经观测到的战报编号")
@@ -280,7 +365,7 @@ class Intelligence:
         if retry:
             changed += self.db.execute("UPDATE report_read_jobs SET state='queued',last_error=NULL,updated_at=? WHERE profile_id=? AND kind=? AND battle_id=? AND state IN ('failed','paused') AND attempts<3",
                 (time.time(), self.profile_id, kind, bid)).rowcount
-            priority = 100
+            priority = max(priority, 100)
         if priority:
             self.db.execute("UPDATE report_read_jobs SET priority=? WHERE profile_id=? AND kind=? AND battle_id=? AND state='queued' AND priority<?",
                 (priority, self.profile_id, kind, bid, priority))
@@ -312,53 +397,79 @@ class Intelligence:
             self.save_same_army_audit(row['battle_id'])
 
     def link_marches(self, bid, side, aid, wid, event_at, name=None, union=None):
-        self.db.execute("DELETE FROM battle_march_links WHERE profile_id=? AND battle_id=? AND side=?",
-            (self.profile_id, str(bid), side))
-        if side == 'attack':
-            self.db.execute('DELETE FROM same_army_audits WHERE profile_id=? AND battle_id=?', (self.profile_id, str(bid)))
         if not wid or not event_at:
+            self._replace_march_links(bid,side,[])
             return
         if not aid:
             if side == "attack" and name and union not in (None, "", "0"):
                 self.infer_attack_arrival(str(bid), wid, event_at, name, union)
+            else:
+                self._replace_march_links(bid,side,[])
             return
         # Same army is directly linked by a report reference; the individual march
         # still requires a coordinate/time match. Never attach its later retreat.
-        rows = self.db.execute('''SELECT * FROM march_samples WHERE profile_id=? AND army_id=?
-            AND state_code IN (1,6) AND to_x=? AND to_y=? AND ABS(end_at-?)<=15''',
+        rows = self.db.execute('''SELECT * FROM live_march_samples WHERE profile_id=? AND army_id=?
+            AND state_code IN (1,6,12) AND to_x=? AND to_y=? AND ABS(end_at-?)<=15''',
             (self.profile_id, str(aid), wid//10000, wid%10000, event_at)).fetchall()
-        for row in rows:
-            self.db.execute("INSERT OR REPLACE INTO battle_march_links VALUES(?,?,?,?,?,?)",
-                (self.profile_id, str(bid), side, row["id"], "coordinate_time_match" if len(rows)==1 else "ambiguous_marches",
-                 row["end_at"]-event_at))
+        self._replace_march_links(bid,side,[(row['id'],"coordinate_time_match" if len(rows)==1 else "ambiguous_marches",
+                                          row['end_at']-event_at) for row in rows])
         if side == 'attack' and len(rows) == 1:
             self.prioritize_review_detail(bid, rows[0], event_at)
 
     def infer_attack_arrival(self, bid, wid, event_at, name, union):
         # An exact scheduled arrival can support an inference. An explicit conflict
         # or multiple possible players/routes leaves the report unbound.
-        if self.db.execute("""SELECT 1 FROM army_report_refs WHERE profile_id=? AND battle_id=?
+        if self.db.execute("""SELECT 1 FROM live_army_report_refs WHERE profile_id=? AND battle_id=?
             AND owner_name=? AND union_id=?""", (self.profile_id, bid, name, union)).fetchone():
+            self._replace_march_links(bid,'attack',[])
             return
         owners = self.db.execute("""SELECT DISTINCT world_uid FROM players WHERE profile_id=? AND name=?
             AND union_id=? AND world_uid IS NOT NULL LIMIT 2""", (self.profile_id, name, union)).fetchall()
         if len(owners) != 1:
+            self._replace_march_links(bid,'attack',[])
             return
-        rows = self.db.execute("""SELECT m.* FROM march_samples m WHERE m.profile_id=? AND m.state_code=1
+        rows = self.db.execute("""SELECT m.* FROM live_march_samples m WHERE m.profile_id=? AND m.state_code IN (1,12)
             AND m.to_x=? AND m.to_y=? AND m.end_at=? AND m.observed_at<=m.end_at
-            AND EXISTS(SELECT 1 FROM army_states s WHERE s.profile_id=m.profile_id AND s.army_id=m.army_id
+            AND EXISTS(SELECT 1 FROM live_army_states s WHERE s.profile_id=m.profile_id AND s.army_id=m.army_id
                 AND s.message_ref=m.message_ref AND s.owner_uid=? AND s.state_code=m.state_code
                 AND s.begin_at=m.begin_at AND s.end_at=m.end_at AND s.from_x=m.from_x AND s.from_y=m.from_y
                 AND s.to_x=m.to_x AND s.to_y=m.to_y) LIMIT 2""",
             (self.profile_id, wid//10000, wid%10000, event_at, owners[0]["world_uid"])).fetchall()
+        self._replace_march_links(bid,'attack',[(rows[0]['id'],ARRIVAL_INFERENCE,0)] if len(rows)==1 else [])
         if len(rows) == 1:
-            self.db.execute("INSERT INTO battle_march_links VALUES(?,?,?,?,?,?)",
-                (self.profile_id, bid, "attack", rows[0]["id"], ARRIVAL_INFERENCE, 0))
+            import reported_archive
+            reported_archive.promote(self.db,self.profile_id,rows[0]['army_id'],bid,event_at)
             self.prioritize_review_detail(bid, rows[0], event_at)
 
+    def _replace_march_links(self, bid, side, values):
+        previous = [tuple(row) for row in self.db.execute('''SELECT march_id,method,arrival_difference
+            FROM battle_march_links WHERE profile_id=? AND battle_id=? AND side=? ORDER BY march_id''',
+            (self.profile_id,str(bid),side))]
+        if previous == sorted(values):
+            return
+        self.db.execute('DELETE FROM battle_march_links WHERE profile_id=? AND battle_id=? AND side=?',
+                        (self.profile_id,str(bid),side))
+        self.db.executemany('INSERT INTO battle_march_links VALUES(?,?,?,?,?,?)',
+                            ((self.profile_id,str(bid),side,*value) for value in values))
+        if side=='attack':
+            self.db.execute('DELETE FROM same_army_audits WHERE profile_id=? AND battle_id=?',(self.profile_id,str(bid)))
+
     def official_campaigns(self):
-        return campaigns_from_messages(self.db.execute("""SELECT message_id,payload,first_seen FROM messages
+        events = campaigns_from_messages(self.db.execute("""SELECT message_id,payload,first_seen FROM messages
             WHERE profile_id=? AND message_id IN (3807,3811) ORDER BY first_seen""", (self.profile_id,)), self.archive.profile)
+        own_union = self.archive.profile["union_id"]
+        for row in self.db.execute("SELECT id,data FROM archived_official_campaigns WHERE profile_id=?", (self.profile_id,)):
+            saved = json.loads(row["data"])
+            if own_union not in saved["unions"]:
+                continue
+            current = events.get(row["id"])
+            if not current or saved["observed_at"] > current["observed_at"]:
+                events[row["id"]] = saved
+            else:
+                current["blocks"] = sorted(set(current["blocks"]) | set(saved["blocks"]))
+                if saved["name_verified"] and not current["name_verified"]:
+                    current.update(name=saved["name"], name_verified=True)
+        return events
 
     def filters(self, query):
         filters = dict(query)
@@ -398,15 +509,39 @@ class Intelligence:
         return result
 
     def unions(self, filters):
-        if filters["union_id"]:
-            return {filters["union_id"]}
         config = self.archive.root / "config.json"
         data = json.loads(config.read_text(encoding="utf-8-sig")) if config.exists() else {}
+        # A query runs under its archive reader lock. Reuse these preferences
+        # for row-level force checks, rather than rereading a file per battle.
+        self.query_relations = {uid:r for uid,r in data.get('relations',{}).items()
+            if uid.isascii() and uid.isdigit() and int(uid)>0
+            and r.get('own_user_id') in (None, data.get('self',{}).get('user_id'))
+            and (r.get('source')!='client' or (r.get('profile_id')==self.profile_id
+                and r.get('own_union_id')==str(self.archive.profile['union_id'])))}
+        if filters["union_id"]:
+            return {filters["union_id"]}
         if filters["relation"] == "enemy":
-            return {str(uid) for uid, relation in data.get("relations", {}).items() if relation.get("relation") == "enemy"}
+            result = {str(uid) for uid, relation in self.query_relations.items() if relation.get("relation") == "enemy"}
+            result.update(r[0] for r in self.db.execute('''SELECT DISTINCT p.union_id FROM player_traits t
+                JOIN players p ON p.profile_id=t.profile_id AND p.player_key=t.player_key
+                WHERE t.profile_id=? AND t.force_type=1 AND p.union_id NOT IN ('','0',?)''',
+                (self.profile_id,str(self.archive.profile['union_id'])))
+                if self.query_relations.get(r[0],{}).get('relation') != 'friendly'
+                and not (self.query_relations.get(r[0],{}).get('manual_override')
+                         and self.query_relations[r[0]].get('relation')!='enemy'))
+            return result
         if filters["relation"] == "ally":
             return {str(self.archive.profile["union_id"])}
         return None
+
+    def scope_matches(self, filters, unions, union, force_type=None):
+        if unions is None or union in unions:
+            return True
+        return (filters['relation']=='enemy' and not filters['union_id'] and force_type==1
+                and union != str(self.archive.profile['union_id'])
+                and not (self.query_relations.get(union,{}).get('manual_override')
+                         and self.query_relations[union].get('relation')!='enemy')
+                and self.query_relations.get(union,{}).get('relation') != 'friendly')
 
     @staticmethod
     def inside(x, y, region):
@@ -424,7 +559,8 @@ class Intelligence:
         campaigns = self.official_campaigns()
         selected = filters.get("official_campaign_id")
         result = []
-        query = '''SELECT c.*,EXISTS(SELECT 1 FROM report_bodies b WHERE b.profile_id=c.profile_id
+        query = '''SELECT c.*,CAST(json_extract(c.features,'$.'||c.side||'er_force') AS INTEGER) AS force_type,
+                EXISTS(SELECT 1 FROM report_bodies b WHERE b.profile_id=c.profile_id
                 AND b.battle_id=c.battle_id) AS has_full_report,
                 json_extract(p.data,'$.block_id') AS battle_block,
                 json_extract(p.data,'$.attack_unionid') AS attack_union,
@@ -440,7 +576,7 @@ class Intelligence:
                 WHERE m.profile_id=:profile AND m.army_id=:aid)'''
         for row in self.db.execute(query + ' ORDER BY c.event_at DESC', params):
             item = dict(row)
-            if unions is not None and item["union_id"] not in unions:
+            if not self.scope_matches(filters,unions,item['union_id'],item['force_type']):
                 continue
             if filters["from_at"] and item["event_at"] < filters["from_at"] or filters["to_at"] and item["event_at"] > filters["to_at"]:
                 continue
@@ -470,16 +606,17 @@ class Intelligence:
         selected = filters.get("official_campaign_id")
         campaign = self.official_campaigns().get(selected) if selected else None
         result = []
-        query = '''SELECT m.*,s.owner_uid,p.name AS player_name,p.union_id FROM march_samples m
+        query = '''SELECT m.*,s.owner_uid,p.name AS player_name,p.union_id,t.force_type FROM march_samples m
             LEFT JOIN army_current a ON a.profile_id=m.profile_id AND a.army_id=m.army_id
             LEFT JOIN army_states s ON s.id=a.state_ref LEFT JOIN players p ON p.profile_id=m.profile_id
-            AND p.player_key='world:'||s.owner_uid WHERE m.profile_id=:profile'''
+            AND p.player_key='world:'||s.owner_uid LEFT JOIN player_traits t
+            ON t.profile_id=p.profile_id AND t.player_key=p.player_key WHERE m.profile_id=:profile'''
         params = {"profile": self.profile_id, "aid": filters["army_id"]}
         if filters["army_id"]:
             query += ' AND m.army_id=:aid'
         for row in self.db.execute(query + ' ORDER BY m.begin_at DESC', params):
             item = dict(row)
-            if unions is not None and item["union_id"] not in unions:
+            if not self.scope_matches(filters,unions,item['union_id'],item['force_type']):
                 continue
             if filters["from_at"] and item["end_at"] < filters["from_at"] or filters["to_at"] and item["begin_at"] > filters["to_at"]:
                 continue
@@ -508,14 +645,15 @@ class Intelligence:
         enemy_unions = self.unions(filters)
         groups, excluded = {}, collections.Counter()
         own = str(self.archive.profile["union_id"])
+        personal='battle:'+str(self.archive.profile.get('battle_role_id')or'')if own in ('','0')else None
         for bid, sides in grouped.items():
             if set(sides) != {"attack", "defend"}:
                 excluded["missing_side"] += 1
                 continue
             a, b = sides["attack"], sides["defend"]
-            if b["union_id"] == own:
+            if (b['player_key']==personal if personal else b["union_id"] == own):
                 a, b = b, a
-            if a["union_id"] != own or (enemy_unions is not None and b["union_id"] not in enemy_unions):
+            if (a['player_key']!=personal if personal else a["union_id"] != own) or not self.scope_matches(filters,enemy_unions,b['union_id'],b.get('force_type')):
                 continue
             if filters["army_id"] and filters["army_id"] not in (a["army_id"], b["army_id"]):
                 continue
@@ -557,11 +695,14 @@ class Intelligence:
         query = """SELECT a.battle_id,a.side,a.event_at,a.wid,a.outcome,a.player_key,a.player_name,a.heroes,a.features,
             b.side AS opponent_side,b.player_key AS opponent_key,b.player_name AS opponent_name,
             b.union_id AS opponent_union,b.heroes AS opponent_heroes,b.features AS opponent_features,
+            CAST(json_extract(b.features,'$.'||b.side||'er_force') AS INTEGER) AS opponent_force,
             json_extract(p.data,'$.block_id') AS battle_block,
             EXISTS (SELECT 1 FROM report_bodies r WHERE r.profile_id=a.profile_id AND r.battle_id=a.battle_id) AS has_full_report
             FROM combat_sides a JOIN combat_sides b ON a.profile_id=b.profile_id AND a.battle_id=b.battle_id AND a.side<>b.side
             JOIN battle_reports p ON p.profile_id=a.profile_id AND p.battle_id=a.battle_id
-            WHERE a.profile_id=:profile AND a.union_id=:own AND b.union_id NOT IN (:own,'','0')
+            WHERE a.profile_id=:profile AND a.union_id=:own
+              AND (b.union_id NOT IN (:own,'','0') OR (b.union_id IN ('','0')
+                   AND CAST(json_extract(b.features,'$.'||b.side||'er_force') AS INTEGER)=1))
               AND a.npc=0 AND b.npc=0
               AND a.outcome IN ('win','loss','draw') AND a.event_at>0
               AND a.event_at>=:from_at AND (:to_at=0 OR a.event_at<=:to_at)"""
@@ -571,10 +712,13 @@ class Intelligence:
                 WHERE l.profile_id=a.profile_id AND l.battle_id=a.battle_id AND l.method='unique_attack_arrival'
                 AND m.army_id=:army_id))"""
         params = {**filters, "profile": self.profile_id, "own": own}
+        if own in ('','0'):
+            query=query.replace('a.union_id=:own','a.player_key=:own_player')
+            params['own_player']='battle:'+str(self.archive.profile.get('battle_role_id')or'')
         samples, recent = [], {}
         coverage = dict(reports=0, full_reports=0, samples=0, repeated=0, complete_builds=0, known_troops=0)
         for row in self.db.execute(query + " ORDER BY a.event_at,a.battle_id", params):
-            if opponents is not None and row["opponent_union"] not in opponents:
+            if not self.scope_matches(filters,opponents,row['opponent_union'],row['opponent_force']):
                 continue
             if filters["region"] and not self.inside(*divmod(row["wid"] or 0, 10000), filters["region"]):
                 continue
@@ -719,8 +863,10 @@ class Intelligence:
         names = {(r["union_id"], r["player_name"]) for r in encounters + operations if r["player_name"]}
         if not filters.get("official_campaign_id") and not any(filters[k] for k in ("region", "from_at", "to_at", "army_id")):
             unions = self.unions(filters)
-            names.update((r["union_id"], r["name"]) for r in self.db.execute("SELECT name,union_id FROM players WHERE profile_id=?", (self.profile_id,))
-                if (unions is None or r["union_id"] in unions) and (not filters["search"] or filters["search"] in r["name"]))
+            names.update((r['union_id'],r['name']) for r in self.db.execute('''SELECT p.name,p.union_id,t.force_type
+                FROM players p LEFT JOIN player_traits t ON t.profile_id=p.profile_id AND t.player_key=p.player_key
+                WHERE p.profile_id=?''',(self.profile_id,))
+                if self.scope_matches(filters,unions,r['union_id'],r['force_type']) and (not filters['search'] or filters['search'] in r['name']))
         return {"observed_names": len(names),
             "observed_armies": len(observed), "linked_armies": len(linked),
             "observed_linked_armies": len(observed & linked),
@@ -729,7 +875,7 @@ class Intelligence:
             "marches_with_report_match": sum(bool(r["battles"]) for r in operations),
             "full_reports": len({r["battle_id"] for r in encounters if r["has_full_report"]}),
             "all_members_verified": False, "all_armies_verified": False,
-            "scope": "当前角色实际收到的敌我双方资料；查询范围不限制采集归档"}
+            "scope": "当前赛季档案中已收录的敌我双方资料，含本机采集及已导入记录"}
 
     def personnel(self, filters):
         groups = {}
@@ -757,8 +903,9 @@ class Intelligence:
             p["latest_at"] = max(p["latest_at"], item["begin_at"])
         if not any(filters[k] for k in ("region", "from_at", "to_at", "army_id")):
             unions = self.unions(filters)
-            for row in self.db.execute("SELECT * FROM players WHERE profile_id=?", (self.profile_id,)):
-                if unions is not None and row["union_id"] not in unions or filters["search"] and filters["search"] not in row["name"]:
+            for row in self.db.execute('''SELECT p.*,t.force_type FROM players p LEFT JOIN player_traits t
+                    ON t.profile_id=p.profile_id AND t.player_key=p.player_key WHERE p.profile_id=?''',(self.profile_id,)):
+                if not self.scope_matches(filters,unions,row['union_id'],row['force_type']) or filters["search"] and filters["search"] not in row["name"]:
                     continue
                 p = person({"union_id": row["union_id"], "player_name": row["name"]})
                 p["identity_keys"].add(row["player_key"])
@@ -803,14 +950,31 @@ class Intelligence:
 
     def query(self, kind, **query):
         with self.archive.lock:
+            if kind in ('formations','formation-history'):
+                import team_catalog
+                return team_catalog.query(self.archive,query)
+            if kind=='territory-events':
+                import territory_events
+                return territory_events.query(self.archive,query)
+            if kind in ('team-log', 'team-log-detail', 'team-log-groups'):
+                import archive_timeline
+                handler = {'team-log': archive_timeline.search, 'team-log-detail': archive_timeline.detail,
+                           'team-log-groups': archive_timeline.grouped}[kind]
+                return handler(self.archive, query)
+            if kind == "main-report-gaps":
+                result = self.main_report_gaps()
+                limit = max(1, min(number(query.get("limit"), 10), 100))
+                return {**result, "profile_id": self.profile_id, "total": len(result["items"]), "items": result["items"][:limit]}
             if kind == "recent-battles":
                 return self.recent_battles(query.get("army_id", ""), query.get("coord", ""))
             if kind == "official-campaigns":
                 events = self.official_campaigns().values()
                 return {"items": sorted(events, key=lambda e: (not e["name_verified"], bool(e["filters"]["to_at"]), -e["observed_at"]))}
             filters = self.filters(query)
-            if kind == "summary":
-                return {"profile_id": self.profile_id, "filters": filters, **self.summary(filters)}
+            if kind in ('summary','personnel','operations','encounters'):
+                import intel_fast
+                return intel_fast.read(self,kind,filters,max(1,min(number(query.get('limit'),100),500)),
+                                       max(0,number(query.get('offset'))))
             if kind == "matchups":
                 result = self.matchup_stats(filters)
             elif kind in ("main-matchups", "combat-analysis"):
@@ -819,9 +983,18 @@ class Intelligence:
                     filters["analysis_dimension"] = "hero" if query.get("analysis_dimension") == "hero" else "skill"
                     filters["analysis_perspective"] = "enemy" if query.get("analysis_perspective") == "enemy" else "own"
                     filters["analysis_subject"] = max(0, number(query.get("analysis_subject")))
-                    result = self.combat_analysis(filters)
+                self.unions(filters)
+                key = (self.profile_id, kind, packed(filters),packed(self.query_relations))
+                cached = self.analysis_cache.get(key)
+                if cached and time.monotonic() - cached[0] < 15:
+                    self.analysis_cache.move_to_end(key)
+                    result = dict(cached[1])
                 else:
-                    result = self.main_matchup_stats(filters)
+                    result = self.combat_analysis(filters) if kind == "combat-analysis" else self.main_matchup_stats(filters)
+                    self.analysis_cache[key] = (time.monotonic(), dict(result))
+                    self.analysis_cache.move_to_end(key)
+                    if len(self.analysis_cache) > 8:
+                        self.analysis_cache.popitem(last=False)
             elif kind == "operations":
                 result = {"items": self.operations(filters)}
             elif kind == "personnel":
@@ -915,10 +1088,17 @@ class Intelligence:
 
     def export(self, payload):
         kind = payload.get("kind")
-        if kind not in ("personnel", "operations", "encounters", "matchups", "main-matchups", "combat-analysis", "report"):
+        if kind not in ("formations", "personnel", "operations", "encounters", "matchups", "main-matchups", "combat-analysis", "report"):
             raise ValueError("未知导出类别")
         with self.archive.lock:
-            if kind == "report":
+            if kind == 'formations':
+                from team_catalog import query as formation_query
+                query={k:v for k,v in payload.items()if k not in ('kind','view','limit','offset')}
+                result=formation_query(self.archive,dict(query,view='teams',limit=100))
+                while result['has_more']:
+                    page=formation_query(self.archive,dict(query,view='teams',limit=100,offset=len(result['items'])))
+                    result['items'].extend(page['items']);result['has_more']=page['has_more']
+            elif kind == "report":
                 result = self.report(payload.get("battle_id", ""))
             else:
                 query = {k:v for k,v in payload.items() if k not in ("kind", "limit", "offset")}

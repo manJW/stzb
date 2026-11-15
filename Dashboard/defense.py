@@ -3,7 +3,7 @@ from collections import defaultdict
 from math import ceil, dist
 
 from combat_loadout import forecast_heroes
-from defense_model import context, estimate, observations, profile as combat_profile, validate
+from defense_model import check_analysis_budget, context, estimate, observations, profile as combat_profile, validate
 from intelligence import wilson
 from lineup_prediction import LOADOUT_FIELDS, meets_main_threshold, predict_alerts
 from observation_codec import map_troop_codes, report_troop_codes
@@ -100,15 +100,18 @@ def rule_evidence(own, enemy, catalog):
     return result
 
 
-def historical_cases(db, profile, union, now):
+def historical_cases(db, profile, union, now, player_key=None):
     sides = defaultdict(dict)
     for row in db.execute(f'''SELECT c.side,c.battle_id,c.player_key,c.event_at,c.observed_at,c.wid,c.outcome,c.heroes,{LOADOUT_FIELDS}
         FROM combat_sides c JOIN combat_sides o ON o.profile_id=c.profile_id AND o.battle_id=c.battle_id
           AND o.side<>c.side WHERE c.profile_id=? AND c.event_at>0 AND c.event_at<? AND c.observed_at<=?
         AND c.npc=0 AND o.npc=0
-        AND ((c.side='defend' AND c.union_id=? AND o.union_id NOT IN (?,'0',''))
-          OR (c.side='attack' AND o.union_id=? AND c.union_id NOT IN (?,'0','')))
-        ORDER BY c.event_at,c.battle_id''', (profile, now, now, union, union, union, union)):
+        AND ((c.side='defend' AND c.union_id=? AND (o.union_id NOT IN (?,'0','')
+              OR (o.union_id IN ('0','') AND CAST(json_extract(o.features,'$.'||o.side||'er_force') AS INTEGER)=1)))
+          OR (c.side='attack' AND o.union_id=? AND (c.union_id NOT IN (?,'0','')
+              OR (c.union_id IN ('0','') AND CAST(json_extract(c.features,'$.'||c.side||'er_force') AS INTEGER)=1))))
+        AND (?<>'0' OR CASE c.side WHEN 'defend' THEN c.player_key ELSE o.player_key END=?)
+        ORDER BY c.event_at,c.battle_id''', (profile, now, now, union, union, union, union,str(union),player_key or '')):
         sides[row['battle_id']][row['side']] = dict(row)
     result, recent = [], {}
     for bid, pair in sides.items():
@@ -130,13 +133,15 @@ def historical_cases(db, profile, union, now):
     return result
 
 
-def alliance_builds(db, profile, union, now, army_ids=None):
+def alliance_builds(db, profile, union, now, army_ids=None, player_key=None):
     seen_armies, seen_formations = set(), set()
     query = f'''SELECT c.side,c.battle_id,c.player_key,c.player_name,c.army_id,c.hero_key,c.event_at,
         c.heroes,c.initial_hp,{LOADOUT_FIELDS}
         FROM combat_sides c WHERE c.profile_id=? AND c.union_id=?
         AND c.event_at>0 AND c.event_at<? AND c.observed_at<=?'''
     params = (profile, union, now, now)
+    if str(union)in ('','0'):
+        query+=' AND c.player_key=?';params+=(player_key or '',)
     if army_ids is not None:
         if not army_ids:
             return
@@ -198,6 +203,7 @@ def recommendations(cases, builds, enemies, catalog, visible, target, deadline, 
         options = []
         enemy_profile = combat_profile(enemy['heroes'])
         for own in builds:
+            check_analysis_budget()
             keys = matchup_keys(own['heroes'], enemy['heroes'])
             samples = {scope: summarize(by_key.get((scope, key), ())) for scope, key in keys.items()}
             rules = rule_evidence(own['heroes'], enemy['heroes'], catalog)
@@ -245,6 +251,16 @@ def recommendations(cases, builds, enemies, catalog, visible, target, deadline, 
             'hypotheses': hypotheses, 'recommendation': recommendation}
 
 
+def current_enemy_items(prediction):
+    resolution = prediction.get('current_resolution')
+    if resolution and resolution.get('unresolved'):
+        return []
+    if resolution:
+        return [item for item in prediction['items']
+                if item['battle_id'] == prediction.get('current_report_id')][:1]
+    return prediction['items'][:3]
+
+
 def analyze_alert(archive, snapshot, army_id):
     for alert in snapshot['alerts']:
         if alert['army_id'] == army_id and alert.get('map_hero_count'):
@@ -254,16 +270,19 @@ def analyze_alert(archive, snapshot, army_id):
         prediction = predict_alerts(archive, snapshot, army_id=army_id).get(army_id)
         if not prediction:
             return {'active': False}
-        if not prediction['items']:
+        enemy_items = current_enemy_items(prediction)
+        if not enemy_items:
             return {'active': True, 'hypotheses': []}
         union = str(archive.profile['union_id'])
         now = snapshot['server_now']
-        cases = historical_cases(archive.db, archive.profile_id, union, now)
-        builds = list(alliance_builds(archive.db, archive.profile_id, union, now))
+        from role_context import context as role_context
+        personal=role_context(archive.profile)['own_player_key']
+        cases = historical_cases(archive.db, archive.profile_id, union, now,player_key=personal)
+        builds = list(alliance_builds(archive.db, archive.profile_id, union, now,player_key=personal))
         catalog = archive.skills
     visible = {(r['id'], r['player_name']): r for r in snapshot['armies']
-               if r['union_id'] == union and not r['stale'] and r['kind'] in ('stay', 'garrison', 'garrison_move')}
-    result = recommendations(cases, builds, prediction['items'][:3], catalog, visible, prediction['target'], prediction['end'])
+               if ((union not in ('','0')and r['union_id'] == union)or r['relation']=='self')and not r['stale'] and r['kind'] in ('stay', 'garrison', 'garrison_move')}
+    result = recommendations(cases, builds, enemy_items, catalog, visible, prediction['target'], prediction['end'])
     low_force = (prediction.get('force') or {}).get('priority') == 'low'
     if low_force:
         result['recommendation'] = None
@@ -272,8 +291,8 @@ def analyze_alert(archive, snapshot, army_id):
 
 def own_speed_history(db, profile, army, state_rules, now):
     rows = db.execute('''SELECT DISTINCT m.id,m.straight_distance,m.straight_grids_per_hour,m.hero_type,
-        m.state_code,s.state_id,json_extract(s.data,'$[9]') AS target_type FROM march_samples m
-        JOIN army_states s ON s.profile_id=m.profile_id AND s.army_id=m.army_id AND s.message_ref=m.message_ref
+        m.state_code,s.state_id,json_extract(s.data,'$[9]') AS target_type FROM live_march_samples m
+        JOIN live_army_states s ON s.profile_id=m.profile_id AND s.army_id=m.army_id AND s.message_ref=m.message_ref
             AND s.begin_at=m.begin_at AND s.end_at=m.end_at AND s.state_code=m.state_code
             AND s.from_x=m.from_x AND s.from_y=m.from_y AND s.to_x=m.to_x AND s.to_y=m.to_y
         WHERE m.profile_id=? AND m.army_id=? AND s.owner_uid=? AND m.begin_at>=? AND m.end_at<=?
@@ -342,10 +361,12 @@ def garrison_plans(archive, snapshot, predictions):
         ready_ids = {aid for options in arrivals.values() for aid in options}
         if not ready_ids:
             return plans
-        builds = {b['army_id']:b for b in alliance_builds(db, profile, union, now, ready_ids)
+        from role_context import context as role_context
+        personal=role_context(archive.profile)['own_player_key']
+        builds = {b['army_id']:b for b in alliance_builds(db, profile, union, now, ready_ids,player_key=personal)
                   if b['player_name'] == visible[b['army_id']]['player_name']
                   and b['troop_codes'] == tuple(t['code'] for t in visible[b['army_id']]['troops'])}
-        cases = historical_cases(db, profile, union, now) if builds else []
+        cases = historical_cases(db, profile, union, now,player_key=personal) if builds else []
         catalog = archive.skills
     reserved = {}
     for alert in alerts:
@@ -354,7 +375,7 @@ def garrison_plans(archive, snapshot, predictions):
                     if (arrival['availability'] != 'estimated' or aid in builds) and reserved.get(aid, target) == target}
         if not eligible:
             continue
-        enemy = next(iter(predictions[enemy_id]['items']), None)
+        enemy = next(iter(current_enemy_items(predictions[enemy_id])), None)
         configured = [builds[aid] for aid in eligible if aid in builds]
         item = None
         if configured and enemy:

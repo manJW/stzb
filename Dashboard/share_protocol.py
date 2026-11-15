@@ -11,7 +11,8 @@ MAX_BYTES = 1_000_000
 MAX_EVENTS = 30
 MAX_AGE = 24 * 3600
 MAP_IDS = {5026, 5028}
-REPORT_IDS = {10, 92, 6231}
+BODY_IDS = {11, 6231}
+REPORT_IDS = {10, 92} | BODY_IDS
 MAP_SLOTS = (0, 1, 2, 3, 4, 5, 9, 15, 16, 27, 31, 32)
 REPORT_FIELDS = set("""battle_id time wid wid_name result npc all_skill_info weather in_night_mode fight_type
     battle_scenes military military_effect extra_result garrison blind is_ai is_support city_type""".split())
@@ -45,7 +46,9 @@ def project_player(raw):
         return None
     extra = raw[12] if isinstance(raw[12], list) else []
     union_name = extra[2] if len(extra) > 2 and isinstance(extra[2], str) else ""
-    return [raw[0], number(raw[1]), number(raw[2])] + [0] * 9 + [[0, 0, union_name[:80]]]
+    projected = [raw[0], number(raw[1]), number(raw[2])] + [0] * 9 + [[0, 0, union_name[:80]]]
+    projected[5] = raw[5] if type(raw[5]) is int else None
+    return projected
 
 
 def project_scene(value, owners=None):
@@ -108,7 +111,7 @@ def validate_events(events, union_id, now):
         mid, at, value = event
         if type(mid) is not int or type(at) not in (int, float) or not math.isfinite(at) or not now-MAX_AGE <= at <= now+120:
             raise ValueError("观测时间或类型无效，请核对 Windows 时间")
-        normalized = project_scene(value) if mid in MAP_IDS else project_body(value) if mid == 6231 else (
+        normalized = project_scene(value) if mid in MAP_IDS else project_body(value) if mid in BODY_IDS else (
             project_report(value, union_id) if mid in REPORT_IDS else None)
         if normalized is None or packed(value) != packed(normalized):
             raise ValueError("记录超出试跑允许的地图或本盟战报范围")

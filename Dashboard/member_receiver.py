@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from archive import Archive, number
-from share_protocol import MAX_BYTES, UPLOAD_PATH, VERSION, endpoint, in_alliance, numeric_id, scope_of, validate_events
+from share_protocol import BODY_IDS, MAX_BYTES, UPLOAD_PATH, VERSION, endpoint, in_alliance, numeric_id, scope_of, validate_events
 
 ROOT = Path(__file__).resolve().parent
 
@@ -91,7 +91,7 @@ def accept(archive, member, payload, now):
                 if (known and all(known) and tuple(known) != location) or batch_reports.get(bid, location) != location:
                     raise ValueError("战报编号与已有时间或坐标冲突")
                 batch_reports[bid] = location
-            if mid == 6231 and str(value["battle_id"]) not in batch_reports:
+            if mid in BODY_IDS and str(value["battle_id"]) not in batch_reports:
                 summary = archive.db.execute("SELECT data FROM battle_reports WHERE profile_id=? AND battle_id=?",
                     (archive.profile_id, str(value["battle_id"]))).fetchone()
                 if not summary or not in_alliance(json.loads(summary[0]), scope["union_id"]):

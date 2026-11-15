@@ -33,7 +33,7 @@ internal static class Installer
             string start = "-NoProfile -ExecutionPolicy Bypass -File \"" + launcher + "\" -Workspace \"" + workspace + "\"";
             CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), Title + ".lnk"), ps, start, program);
             CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), Title + " - 停止.lnk"), ps, start + " -Stop", program);
-            Process.Start(new ProcessStartInfo(ps, start) { UseShellExecute = false, CreateNoWindow = true });
+            Process.Start(new ProcessStartInfo(ps, start + " -Upgrade") { UseShellExecute = false, CreateNoWindow = true });
             return 0;
         }
         catch (Exception error)

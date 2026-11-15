@@ -21,9 +21,9 @@ from game_locator import ASSETS, CoordinateControls, OcrCoordinateControls, Wind
 from lineup_prediction import predict_alerts
 from model import write_json
 
-TEAM = '79000215'
-ROLE = '7900021'
-OWNER = '71021'
+TEAM = '93209065'
+ROLE = '9320906'
+OWNER = '12319'
 TROOPS = (3, 3, 0)
 TRIAL_SECONDS = 20 * 60
 SHANGHAI = ZoneInfo('Asia/Shanghai')
@@ -753,7 +753,7 @@ class GarrisonTrial:
         team_id = status.get('team_id', TEAM)
         with self.archive.lock:
             rows = self.archive.db.execute("""SELECT state_code,from_x,from_y,to_x,to_y,begin_at,end_at,observed_at,
-                json_extract(data,'$[9]') AS target_type FROM army_states
+                json_extract(data,'$[9]') AS target_type FROM live_army_states
                 WHERE profile_id=? AND army_id=? AND owner_uid=? AND observed_at>=?
                 ORDER BY observed_at ASC""",
                 (self.archive.profile_id, team_id, OWNER, status['submitted_at']-1)).fetchall()

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'">
+  <title>率土战场</title>
+  <link rel="stylesheet" href="shell.css">
+</head>
+<body>
+  <header class="titlebar"><span>率土战场</span><span class="titlebar-sub">同盟作战工作台</span><button class="compact-return" data-action="compact" title="取消置顶并恢复工作台">返回大窗</button></header>
+  <aside class="navigation" aria-label="客户端导航">
+    <div class="wordmark"><img src="icon.png" alt=""><div><strong>率土战场</strong><span>本机工作台</span></div></div>
+    <div class="nav-caption">工作空间</div>
+    <nav>
+      <button data-route="map" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2Z M9 3v16 M15 5v16"/></svg><span>实时地图</span><kbd>1</kbd></button>
+      <button data-route="intel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4Z M4 10h16 M10 10v10"/></svg><span>情报看板</span><kbd>2</kbd></button>
+      <button data-route="archive"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v14H4Z M3 3h18v4H3Z M9 11h6"/></svg><span>赛季档案</span><kbd>3</kbd></button>
+      <button data-route="attendance"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v16H4Z M8 2v6 M16 2v6 M4 10h16 m-12 5 3 3 5-5"/></svg><span>同盟考勤</span><kbd>4</kbd></button>
+    </nav>
+    <div class="nav-spacer"></div>
+    <div id="role" class="role" hidden><span class="role-avatar">盟</span><div><strong id="roleName"></strong><span id="roleUnion"></span></div></div>
+    <nav class="utilities">
+      <button data-action="compact" title="只显示当前地块的来袭与队伍，并置顶"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v16H3Z M12 10h9v10h-9Z"/></svg><span>置顶小窗</span></button>
+      <button data-action="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16 M4 17h16 M8 4v6 M16 14v6"/></svg><span>设置</span></button>
+      <button data-action="browser"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18 M12 3c5 5 5 13 0 18-5-5-5-13 0-18"/></svg><span>浏览器打开</span></button>
+    </nav>
+    <div class="connection-state"><i id="statusDot" data-tone="waiting"></i><span id="statusText">正在连接本机</span></div>
+    <div class="version"><span>桌面版 0.2</span><button data-action="logs" title="打开客户端日志">日志 ↗</button></div>
+  </aside>
+  <main id="loading" class="loading" aria-live="polite">
+    <div class="loading-inner"><div id="loader" class="loader"></div><h1 id="loadingTitle">正在连接本机看板</h1><p id="loadingDetail">读取当前地图与赛季档案</p><div id="errorActions" hidden><button data-action="retry" class="primary">重新连接</button><button data-action="logs">打开日志</button></div></div>
+  </main>
+  <script src="shell.js"></script>
+</body>
+</html>

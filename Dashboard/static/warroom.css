@@ -12,6 +12,14 @@
 .filter-count:not(:empty) { margin-left: 6px; color: var(--muted); }
 .filter-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
 .filter-actions button { min-height: 32px; font-size: 12px; }
+.collection-metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0 18px; margin:12px 0 20px; padding:12px 16px 8px; border:1px solid var(--line); border-radius:8px; background:var(--surface,#fff); }
+.collection-metrics>div { display:flex; flex-direction:column; gap:3px; padding-left:10px; border-left:3px solid #4477ac; }
+.collection-metrics>div:nth-child(2) { border-color:#398268; }
+.collection-metrics>div:nth-child(3) { border-color:#bb8a31; }
+.collection-metrics span,.collection-metrics small { color:var(--muted); font-size:12px; }
+.collection-metrics strong { font-size:19px; font-variant-numeric:tabular-nums; }
+.collection-metrics>p { grid-column:1/-1; margin:8px 0 0; font-size:11px; }
+@media(max-width:620px) { .collection-metrics { gap:10px; padding:10px; } .collection-metrics strong { font-size:15px; } }
 .results-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 16px 8px; }
 .results-heading .help { margin: 0; }
 .pagination { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
@@ -55,3 +63,5 @@
   .report-columns { grid-template-columns: 1fr; gap: 9px; }
   .report-columns section + section { border-inline-start: 0; border-top: 1px solid var(--line); padding-inline-start: 0; }
 }
+.team-label {display:inline-block;max-width:100%;white-space:normal;text-align:left;line-height:1.65;overflow-wrap:anywhere}
+.army-buttons .team-label {display:block;margin:3px 0;font:inherit}

@@ -14,14 +14,14 @@ class TrialTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.connection = {'source':'pc'}
-        self.army = {'id':TEAM, 'owner':'71021', 'relation':'self', 'current_connection':True,
+        self.army = {'id':TEAM, 'owner':'12319', 'relation':'self', 'current_connection':True,
                      'stale':False, 'state_code':5, 'target_type':0, 'kind':None, 'position':[1011,942],
                      'from':[1011,942], 'target':[1011,942], 'troops':[{'code':code} for code in (3,3,0)]}
         self.alert = {'army_id':'enemy', 'coord':[1006,941], 'end':1150}
         self.snapshot = {'reliable':True, 'health':{'connection':self.connection},
                          'alerts':[self.alert], 'armies':[self.army]}
         state = SimpleNamespace(snapshot=lambda: self.snapshot)
-        archive = SimpleNamespace(profile={'account_role_id':'7900021'})
+        archive = SimpleNamespace(profile={'account_role_id':'9320906'})
         self.trial = GarrisonTrial(state, archive, SimpleNamespace(lock=threading.Lock()),
                                   lambda: None, Path(self.directory.name))
         self.trial.status.update(phase='reading', until=1200)
@@ -187,15 +187,15 @@ class TrialTests(unittest.TestCase):
         self.screen.hit.assert_not_called()
 
     def test_web_team_candidates_and_order_use_the_selected_own_slot(self):
-        own = {**self.army,'id':'79000213','position':[1008,947],'from':[1008,947],'target':[1008,947],
+        own = {**self.army,'id':'93209063','position':[1008,947],'from':[1008,947],'target':[1008,947],
                'troops':[{'code':code} for code in (31,22,31)]}
-        ally = {**own,'id':'79000214','owner':'55','relation':'ally'}
-        stale = {**own,'id':'79000212','stale':True}
+        ally = {**own,'id':'93209064','owner':'55','relation':'ally'}
+        stale = {**own,'id':'93209062','stale':True}
         self.snapshot.update(armies=[own, ally, stale], server_now=1000,
                              forts=[{'coord':[1008,947],'name':'fort'}])
         self.snapshot['health']['capture_source'] = 'pc'
         self.assertEqual([(a['id'], a['slot']) for a in available_garrison_teams(self.snapshot)],
-                         [('79000213', 3)])
+                         [('93209063', 3)])
         self.alert.update(army_id='9001', player_name='Selected')
         self.trial.status['phase'] = 'off'
         with (patch('garrison_trial.predict_alerts', return_value={'9001':{'force_assessment':{'kind':'main'}}}),

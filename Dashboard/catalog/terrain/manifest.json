@@ -1,0 +1,23 @@
+{
+  "maps": [
+    {
+      "map_config_id": 34,
+      "size": 1501,
+      "scope": {
+        "server": "X6147",
+        "season": "current-20261105"
+      },
+      "sha256": "9964a91585666c021737a3d1abaaa18cd1b0d389b51c23d96a0179f9f1746fa2",
+      "source": {
+        "path": "mini_client_res/real3d/map_game_data/34/common/map_all_data.mbd",
+        "resource_sha256": "d8b6d610f0319776c97f48d3525568651ae908866726e8b9e713bcf6f39ec3a6",
+        "decoded_sha256": "a2122551753094c7e2901d33f741011e0602eb234ac6d9ef4795bc845f271906",
+        "binding": "Current login Tb_sys_param[26]=34; client MultiCfgTable maps map_all_data[34] to 34",
+        "index": "(x-1)*1501+y-1",
+        "terrain_bits": "MapAllData[gridIndex*2] & 7; water=1, mountain=3",
+        "checked_occupied_tiles": 9353,
+        "occupied_on_water_or_mountain": 0
+      }
+    }
+  ]
+}

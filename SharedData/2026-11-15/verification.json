@@ -1,0 +1,19 @@
+{
+  "verified_at_utc": "2026-11-15T04:28:07.821768+00:00",
+  "source_version": "0.2.4",
+  "restore_verified": true,
+  "sqlite_quick_check": "ok",
+  "all_table_counts_verified": true,
+  "all_part_sha256_verified": true,
+  "compressed_sha256_verified": true,
+  "restored_sha256": "a4210c3d66763dbf241a5e766481be6e0e3a800c993b92e540f4ec670fd7d717",
+  "restored_bytes": 2016849920,
+  "excluded_table_contents_empty": [
+    "client_table_events",
+    "message_fields",
+    "message_redactions",
+    "messages",
+    "pilot_members",
+    "report_read_jobs"
+  ]
+}
