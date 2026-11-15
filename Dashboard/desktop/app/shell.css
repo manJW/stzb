@@ -1,0 +1,51 @@
+:root{color-scheme:light;font-family:"Segoe UI","Microsoft YaHei UI",sans-serif;color:#243047;background:#f7f8fa;font-synthesis:none}
+*{box-sizing:border-box}body{margin:0;height:100vh;overflow:hidden}button{font:inherit;cursor:pointer;color:inherit}button:focus-visible{outline:2px solid #315bca;outline-offset:2px}button{transition:background .13s,color .13s}button svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.55;stroke-linecap:round;stroke-linejoin:round;flex:none}[hidden]{display:none!important}
+.titlebar{height:44px;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid #e5e8ee;app-region:drag;user-select:none;font-size:11px;font-weight:600;color:#536077}.titlebar-sub{font-size:10px;font-weight:400;color:#8b94a5}
+.navigation{position:absolute;inset:44px auto 0 0;width:184px;display:flex;flex-direction:column;border-right:1px solid #e3e7ee;padding:0 12px 14px;background:#f7f8fa}
+.wordmark{display:flex;align-items:center;gap:10px;padding:26px 10px 30px}.wordmark img{width:33px;height:33px;border-radius:9px}.wordmark strong{display:block;font-size:16px;font-weight:680;letter-spacing:.3px}.wordmark div>span{display:block;font-size:10px;color:#8992a2;margin-top:3px;letter-spacing:1px}.nav-caption{font-size:10px;color:#929aaa;margin:0 10px 10px;letter-spacing:.8px}
+nav{display:flex;flex-direction:column;gap:5px}nav button{display:flex;align-items:center;gap:10px;width:100%;border:0;border-radius:6px;background:transparent;padding:10px 12px;text-align:left;font-size:12px;color:#647086;min-height:40px}nav button:hover{background:#eceff4;color:#233651}nav button[aria-current="page"]{background:#e8edfa;color:#3158be;font-weight:650}nav button kbd{margin-left:auto;font:10px "Segoe UI",sans-serif;color:#acb4c3;visibility:hidden}nav button:hover kbd{visibility:visible}.nav-spacer{flex:1}.utilities{padding-top:10px;border-top:1px solid #e5e8ee}.utilities button{font-size:11px;padding:9px 12px;min-height:36px}
+.role{display:flex;gap:9px;align-items:center;min-width:0;padding:13px 7px 19px}.role-avatar{display:grid;place-items:center;width:29px;height:29px;flex:none;background:#e7ecf7;color:#627ba5;border:1px solid #dde4f0;border-radius:8px;font-size:12px}.role>div{overflow:hidden}.role strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;font-weight:600}.role div>span{display:block;font-size:10px;color:#8b94a5;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.connection-state{display:flex;gap:7px;align-items:center;padding:18px 9px 11px;font-size:10px;color:#8791a2;line-height:1.4}.connection-state span{max-width:129px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.connection-state i{display:block;width:6px;height:6px;border-radius:50%;background:#d2a153;flex:none}.connection-state i[data-tone="live"]{background:#368b73;box-shadow:0 0 0 3px #368b7310}.connection-state i[data-tone="error"]{background:#bd514c}.version{display:flex;justify-content:space-between;align-items:center;padding:0 9px;font-size:9px;color:#a1a8b5}.version button{font-size:9px;color:#939caf;border:0;background:none;padding:0}
+.loading{position:absolute;left:184px;top:44px;right:0;bottom:0;display:grid;place-items:center;background:#fbfcfe}.loading-inner{text-align:center;max-width:420px;padding:24px}.loading h1{font-size:19px;letter-spacing:0;font-weight:600;margin:22px 0 9px}.loading p{font-size:12px;color:#8a94a6;line-height:1.8}.loading button{margin:14px 3px 0;padding:8px 15px;border:1px solid #dce2ed;border-radius:6px;background:#fff;font-size:12px}.loading button.primary{background:#315bca;border-color:#315bca;color:#fff}.loader{width:25px;height:25px;margin:auto;border:2px solid #e0e6f2;border-top-color:#4167bd;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* Color-coded desktop navigation. Bright work surfaces remain in the content view. */
+:root { background:#f1eee7; color:#213f49; }
+.titlebar { background:#f1eee7; color:#35514f; border-bottom-color:#dfdfd4; font-size:12px; }
+.titlebar-sub { color:#68715e; }
+.compact-return { display:none; app-region:no-drag; margin-left:auto; margin-right:138px; padding:3px 7px; border:1px solid #d7d8cb; border-radius:4px; background:#fffdf7; font-size:10px; }
+.compact-window .titlebar { height:32px; padding-left:12px; gap:6px; font-size:11px; }
+.compact-window .titlebar-sub { display:none; }
+.compact-window .compact-return { display:block; }
+.compact-window .navigation { display:none; }
+.compact-window .loading { left:0; top:32px; }
+.navigation { background:#193e4b; border-right-color:#163642; }
+.wordmark strong { color:#fff8e9; font-size:17px; font-weight:750; }
+.wordmark div>span { color:#9eb9be; letter-spacing:.7px; }
+.wordmark img { box-shadow:0 0 0 1px #ffffff20,0 4px 8px #0c283526; }
+.nav-caption { color:#8eacb4; font-size:10px; font-weight:600; letter-spacing:1px; }
+nav { gap:7px; }
+nav button { color:#ccdde1; border-radius:7px; font-size:13px; }
+nav button:hover { background:#294f5c; color:#fff; }
+nav button svg { transition:transform .15s ease; }
+nav button:hover svg { transform:translateX(1px); }
+nav button[data-route="map"] svg { color:#6bcab5; }
+nav button[data-route="intel"] svg { color:#c2abea; }
+nav button[data-route="archive"] svg { color:#e8c176; }
+nav button[aria-current="page"] { color:#fff; font-weight:700; box-shadow:0 3px 8px #0c283524; }
+nav button[data-route="map"][aria-current="page"] { background:#147c69; }
+nav button[data-route="intel"][aria-current="page"] { background:#7354a7; }
+nav button[data-route="archive"][aria-current="page"] { background:#9a651c; }
+nav button[aria-current="page"] svg { color:#fff; }
+nav button[aria-current="page"] kbd { color:#ffffffa8; }
+.utilities { border-top-color:#355763; }
+.utilities button { color:#aec6cf; font-size:12px; }
+.role { padding:12px 10px; margin:0 2px 14px; border:1px solid #3a6370; border-radius:8px; background:#254b58; }
+.role-avatar { color:#f5d395; background:#365c65; border-color:#567978; }
+.role strong { color:#fff7e9; font-size:12px; }
+.role div>span { color:#9ebec6; }
+.connection-state { color:#adcbc8; }
+.connection-state i[data-tone="live"] { background:#59cf9f; box-shadow:0 0 0 3px #59cf9f15; }
+.version,.version button { color:#89a9b4; }
+.loading { background:#faf9f5; }
+.loading h1 { color:#254c52; }
+@media(prefers-reduced-motion:reduce) { nav button svg { transition:none; transform:none; } }

@@ -1,0 +1,19 @@
+{
+  "state_rules": {
+    "1:0:*": {
+      "kind": "attack",
+      "verified": true,
+      "require_different_coordinate": true
+    },
+    "6:14:*": {
+      "kind": "garrison",
+      "verified": true,
+      "require_same_coordinate": true
+    },
+    "25:0:*": {
+      "kind": "stay",
+      "verified": true,
+      "require_same_coordinate": true
+    }
+  }
+}

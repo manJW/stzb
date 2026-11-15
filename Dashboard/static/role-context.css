@@ -1,0 +1,5 @@
+body[data-role-pending="true"]::after {
+  content:"正在自动识别当前账号，核对后自动恢复…";
+  position:fixed;inset:0;z-index:99999;display:grid;place-items:center;
+  padding:24px;background:#f8f8f4;color:#52645f;font-size:16px;
+}

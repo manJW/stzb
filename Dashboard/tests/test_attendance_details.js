@@ -1,0 +1,18 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const vm=require('node:vm');
+const source=fs.readFileSync(path.join(__dirname,'../static/attendance.js'),'utf8');
+const context=vm.createContext({});
+vm.runInContext(source.slice(0,source.indexOf('let latest='))+';globalThis.render={reportMatch,teamNames};',context);
+const {reportMatch,teamNames}=context.render;
+assert.equal(teamNames([{position:3,name:'前锋'},{position:1,name:'大营'},{position:2,name:'中军'}]),'大营 / 中军 / 前锋');
+assert.equal(teamNames([]),'队伍资料未齐');
+const html=reportMatch({battle_id:'12345',own_heroes:[{position:1,name:'曹操'}],opponent_name:'对手<甲>',opponent_heroes:[{position:1,name:'张辽'}]});
+assert.ok(html.includes('href="/?battle_id=12345"'));
+assert.ok(html.includes('曹操'));assert.ok(html.includes('张辽'));assert.ok(html.includes('对手&lt;甲&gt;'));
+assert.ok(!html.replace(/<[^>]*>/g,'').includes('12345'));
+assert.ok(html.includes('rel="noopener"'));
+const unsafe=reportMatch({battle_id:'" onmouseover="bad',own_heroes:[{position:1,name:'<img src=x>'}],opponent_name:'"<evil>'});
+assert.ok(!unsafe.includes('<img'));assert.ok(!unsafe.includes('<evil>'));assert.ok(!unsafe.includes(' onmouseover='));
+console.log('Attendance details: ordered lineups, opponent labels, exact report links, missing data and escaped content passed');

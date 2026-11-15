@@ -1,0 +1,12 @@
+{
+  "file": "STLab.BattleReportReader.d33a6e937c8a.dll",
+  "sha256": "5622c4010fdba28d91529b8e5902ddd882f1d80494997bad34dfd620f0a8d62c",
+  "commands": [
+    10,
+    11,
+    92,
+    103
+  ],
+  "main_thread": "NeoX.Game.EventLogic",
+  "hooks": 0
+}
