@@ -73,6 +73,9 @@ const flush=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};
   assert.ok(!vm.runInContext('compactForecastLoadout(state.armies[1],prediction)',context).includes('荀彧'),
     'A different army ID cannot use the same-player forecast');
   assert.ok(!vm.runInContext('compactForecastLoadout(state.armies[0],{...prediction,current_resolution:{unresolved:"missing"}})',context).includes('荀彧'));
+  const changed=vm.runInContext('compactForecastLoadout(state.armies[0],{...prediction,current_resolution:{complete_roster:true,unresolved:"troop_conflict"}})',context);
+  assert.ok(changed.includes('兵种已变化')&&!changed.includes('荀彧')&&!changed.includes('资料未齐'),
+    'A complete historical roster with changed troop codes must not be called a missing report or restored');
   assert.ok(!vm.runInContext('compactForecastLoadout(state.armies[0],{...prediction,current_resolution:null,same_army_report_id:"old-army-report"})',context).includes('荀彧'),
     'An old army reference cannot verify a different current player-wide guess');
   console.log('Compact selected army: route/time, single verified lineup, collapsed tactics, latest refresh and same-player switch isolation passed');

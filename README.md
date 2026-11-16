@@ -2,7 +2,22 @@
 
 前端、Python 后端、Electron 客户端、Windows 安装构建脚本，以及可恢复的历史业务数据库。
 
-当前客户端版本：**0.2.4**。源码快照日期：**2026-11-15**。
+当前客户端版本：**0.2.7**。源码快照日期：**2026-11-16**。
+
+## 下载客户端
+
+请从 [v0.2.7 Releases](https://github.com/manJW/stzb/releases/tag/v0.2.7) 下载：
+
+- 安装版：`STZB-Battlefield-Desktop-Setup-0.2.7-universal-x64.exe`
+- 免安装版：`STZB-Battlefield-Portable-0.2.7-x64.zip`，解压全部文件后打开「率土战场.exe」。
+- `SHA256SUMS.txt`：核对下载文件完整性。
+
+安装版和免安装版共用内置 Python 的直接启动入口，自动发现采集驱动并核对当前角色、区服和赛季。
+两版升级均保留 Workspace 数据；旧版后台只在确认目录和进程归属后正常保存退出。
+免安装版的看板无需安装，但首次采集仍需要 Wireshark/Npcap 驱动。
+
+**当前发行包未签名**，浏览器或 Windows 仍可能提示下载信誉不足。ZIP、哈希校验和本机扫描均不能保证其他电脑不拦截。
+签名所缺材料及发布检查见 [签名与发布说明](Dashboard/windows-install/签名与发布说明.md)。
 
 ## 目录
 
@@ -43,7 +58,7 @@ python Tools/restore_shared_data.py --database Dashboard/data/intelligence.sqlit
 
 桌面发行版使用 Python、Pillow、tzdata、Electron、Frida 和 Wireshark。
 构建入口为 `Dashboard/windows-install/build_desktop_installer.py`；运行 `--help` 查看需要提供的依赖目录。
-第三方运行库、抓包驱动及安装包需按构建脚本的版本和 SHA-256 单独准备；仓库提供构建源码，未包含预编译安装 EXE。
+第三方运行库、抓包驱动及安装包需按构建脚本的版本和 SHA-256 单独准备；Git 历史保存源码与数据，预编译 EXE 和 ZIP 单独发布在 Releases。
 内部抓包诊断与程序集分析工具继续留在本地，采集所需的帧解析器由 `Dashboard/capture_decoder.py` 提供。
 
 ## 检查

@@ -28,6 +28,7 @@ class ReportEvidenceReader:
         self.profile_blocked_until = 0
         self.continuous = False
         self.total_requests = 0
+        self.structured_requests = self.profile_requests = 0
         self.not_before = 0
         self.budget_cooldown = False
         self.last_completed = 0
@@ -48,7 +49,9 @@ class ReportEvidenceReader:
             result = {"active": self.active, "waiting_response": self.waiting, "requests": self.requests,
                 "max_requests": self.maximum, "reason": self.reason, "profile_temporarily_blocked": self.profile_blocked,
                 "continuous": self.continuous, "total_requests": self.total_requests,
-                "selected_army": self.focus_status}
+                "selected_army": self.focus_status,"automatic_full_text":False,"detail_mode":"structured_fields",
+                "automatic_requests":{"profiles":self.profile_requests,"structured_details":self.structured_requests,"numeric_body":0},
+                "queue_reconciliation":dict(getattr(self.archive.intelligence,'detail_queue_reconciliation',{}))}
         with self.archive.lock:
             result["jobs"] = [dict(r) for r in self.archive.db.execute('''SELECT kind,state,COUNT(*) AS count
                 FROM report_read_jobs WHERE profile_id=? GROUP BY kind,state''', (self.profile_id,))]
@@ -69,7 +72,7 @@ class ReportEvidenceReader:
             self.active, self.requests, self.maximum, self.failures = True, 0, maximum, 0
             self.profile_blocked = False
             self.continuous = continuous
-            self.reason = reason or "补全地图已观测战报摘要与本盟战报全文"
+            self.reason = reason or "补全已观测战报的队伍资料与交战结果"
         self.wake.set()
         return self.snapshot()
 
@@ -153,8 +156,8 @@ class ReportEvidenceReader:
         self.wake.set()
 
     def _received(self, kind, bid):
-        table = "battle_reports" if kind == "profile" else "report_bodies"
-        return self.archive.db.execute(f"SELECT 1 FROM {table} WHERE profile_id=? AND battle_id=?",
+        if kind=='detail':return self.archive.intelligence.detail_received(bid)
+        return self.archive.db.execute("SELECT 1 FROM battle_reports WHERE profile_id=? AND battle_id=?",
             (self.profile_id, str(bid))).fetchone() is not None
 
     def _step(self):
@@ -188,7 +191,7 @@ class ReportEvidenceReader:
             if self.profile_blocked and time.monotonic() >= self.profile_blocked_until:
                 self.profile_blocked = False
             if self.continuous and not self.profile_blocked:
-                self.reason = "持续跟随新战报编号，自动补全摘要与全文"
+                self.reason = "持续跟随新战报，补齐队伍资料与结果；不单独补采数字正文"
         with self.archive.lock, self.archive.db:
             if self.continuous and time.monotonic() >= self.retry_at:
                 # Bounded retries persist across restarts; unavailable reports do not block later jobs.
@@ -203,8 +206,8 @@ class ReportEvidenceReader:
             if (self.continuous and self.priority_detail_reads >= 5
                     and not (rows and rows[0]['priority'] >= URGENT_DETAIL_PRIORITY)):
                 # Preserve priority for main armies without starving other
-                # battles needed for later analysis. One ordinary full-text
-                # opportunity follows every five priority detail attempts.
+                # battles needed for later analysis. One ordinary structured
+                # detail opportunity follows every five priority attempts.
                 ordinary = self.archive.db.execute('''SELECT * FROM report_read_jobs
                     WHERE profile_id=? AND state='queued' AND kind='detail' AND priority<?
                     ORDER BY CAST(battle_id AS INTEGER) DESC LIMIT 1''',
@@ -219,7 +222,9 @@ class ReportEvidenceReader:
                     self.pause("当前补全队列已处理完；新观测到的编号会继续入队")
                 return
             kind = rows[0]["kind"]
-            jobs = [r for r in rows if r["kind"] == kind][:15 if kind == "profile" else 1]
+            jobs = [r for r in rows if r["kind"] == kind][:15]
+            if rows[0]['priority']>=URGENT_DETAIL_PRIORITY:
+                jobs=[r for r in jobs if r['priority']>=URGENT_DETAIL_PRIORITY]
             jobs = [r for r in jobs if not self._received(kind, r["battle_id"])]
             # Existing replies can satisfy a queued request before this worker reaches it.
             for r in rows:
@@ -234,15 +239,16 @@ class ReportEvidenceReader:
         with self.lock:
             self.requests += 1
             self.total_requests += 1
+            if kind=='detail':self.structured_requests+=1
+            else:self.profile_requests+=1
             self.waiting = True
             if kind == 'detail':
                 self.priority_detail_reads = self.priority_detail_reads + 1 if jobs[0]['priority'] >= MAIN_DETAIL_PRIORITY else 0
         error = None
         try:
-            if kind == "profile":
-                self.bridge.fetch_profiles([int(r["battle_id"]) for r in jobs])
-            else:
-                self.bridge.fetch_battle_detail(int(jobs[0]["battle_id"]))
+            # Command 10 returns structured heroes/skills/HP/results. Command
+            # 11 returns only numeric turn text and is never an automatic goal.
+            self.bridge.fetch_profiles([int(r["battle_id"]) for r in jobs])
             deadline = time.monotonic() + self.RESPONSE_TIMEOUT
             while not self.closed.is_set():
                 with self.archive.lock:
@@ -271,14 +277,14 @@ class ReportEvidenceReader:
                 if kind == "profile":
                     self.profile_blocked, self.failures = True, 0
                     self.profile_blocked_until = time.monotonic() + 300
-                    self.reason = "部分摘要未返回，已暂缓摘要补取，继续补已知战报全文"
+                    self.reason = "部分摘要未返回，已暂缓摘要补取，继续核对已知战报资料"
                 else:
                     if self.continuous:
                         self.failures = 0
                         self.not_before = time.monotonic() + 60
-                        self.reason = "部分全文未返回，冷却60秒后继续其他已观测战报"
+                        self.reason = "部分队伍资料未返回，冷却60秒后继续其他已观测战报"
                     else:
-                        self.active, self.reason = False, "连续两次未获得全文，已暂停补全；原始观测继续保留"
+                        self.active, self.reason = False, "连续两次未获得队伍资料，已暂停补全；原始观测继续保留"
 
     def _run(self):
         while not self.closed.is_set():

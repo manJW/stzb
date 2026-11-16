@@ -688,7 +688,10 @@ function compactForecastLoadout(row,prediction){
     else if(prediction.same_army_report_id&&(!prediction.current_report_id||prediction.current_report_id===prediction.same_army_report_id))
       report=prediction.items.find(item=>item.battle_id===prediction.same_army_report_id);
   }
-  return selectedLoadoutMarkup(row,report,prediction?.current_resolution?.unresolved?'该队最新战报资料未齐':'该队武将资料未核实');
+  const changed=resolution?.complete_roster===true&&
+    ['troop_conflict','incomplete_or_changed_troops'].includes(resolution.unresolved);
+  return selectedLoadoutMarkup(row,report,changed?'该队兵种已变化，等待新战报核实':
+    prediction?.current_resolution?.unresolved?'该队最新战报资料未齐':'该队武将资料未核实');
 }
 const resolvedGroupNames=new Map();
 function renderGroupDetails(){

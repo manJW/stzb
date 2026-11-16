@@ -1,9 +1,10 @@
 """Per-position troop types, equipment and advancement from PC battle summaries."""
 import json
+import copy
 import re
 from pathlib import Path
 
-from observation_codec import TROOP_NAMES, TROOP_TYPES, report_troop_codes
+from observation_codec import TROOP_NAMES, TROOP_TYPES, report_troop_codes, report_system_npc
 
 
 CATALOG = Path(__file__).with_name('catalog')
@@ -12,6 +13,33 @@ HEROES = json.loads((CATALOG / 'heroes.json').read_text(encoding='utf-8'))
 SKILLS = json.loads((CATALOG / 'skills.json').read_text(encoding='utf-8'))
 SKILL_SLOT_ROW = re.compile(r'[1-6](?:,[0-9]{1,10},[0-9]{1,10}){1,3}')
 UNKNOWN_SKILL_SLOTS = (None, None, None)
+
+
+def structured_report_complete(battle):
+    """Field readiness is independent of numeric turn text and army association."""
+    if not isinstance(battle,dict) or not str(battle.get('result','')).isdecimal():return False
+    for side in ('attack','defend'):
+        # Land/NPC records remain useful without a human loadout on the NPC side.
+        if report_system_npc(battle,side):continue
+        if not battle.get(side+'_name'):return False
+        raw=str(battle.get(side+'_all_hero_info')or'').removesuffix(';').split(';')
+        cards=str(battle.get(side+'_idu')or'').split(',')[1:4]
+        expected=max((i for i,v in enumerate(cards,1)if v.isdecimal()and int(v)>0),default=3)
+        if not 1<=len(raw)<=3 or len(raw)<expected:return False
+        stars=report_rows(battle.get(side+'_advance'),side,6)
+        skills=skill_slots_by_position(battle.get('all_skill_info'),side)
+        present=False
+        for pos,segment in enumerate(raw):
+            fields=segment.split(',')
+            if len(fields)!=5 or not all(v.isascii()and v.isdecimal()and len(v)<=10 for v in fields):return False
+            hero,level,initial,remaining,wounded=map(int,fields)
+            if hero==0:
+                if any((level,initial,remaining,wounded)):return False
+                continue
+            present=True
+            if level<=0 or not stars[pos] or not 0<=stars[pos][0]<=5 or any(s is None for s in skills[pos]):return False
+        if not present:return False
+    return True
 
 
 def hero_name(hero_id, saved_name):
@@ -108,6 +136,7 @@ def side_heroes(heroes, side, features):
 
 
 def forecast_heroes(report):
+    if report.get('_resolved_heroes') is not None:return copy.deepcopy(report['_resolved_heroes'])
     skill_raw = (report['skill_raw'] or '') if 'skill_raw' in report else None
     return with_loadout(json.loads(report['heroes']), report['side'], report.get('advance_raw'), report.get('gear_raw'),
                         report.get('troop_raw'), skill_raw)

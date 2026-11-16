@@ -23,7 +23,7 @@ PILLOW = (
     "9dda0788a9932776a75d8bcc020076edc308ce2508b51f6739a45e3158b3fc42",
 )
 MODULES = (
-    "archive.py", "reported_archive.py", "collector.py", "combat_loadout.py", "defense.py", "defense_model.py", "lineup_projection.py", "report_priority.py", "union_relations.py",
+    "archive.py", "reported_archive.py", "collector.py", "capture_decoder.py", "combat_loadout.py", "defense.py", "defense_model.py", "lineup_projection.py", "report_priority.py", "union_relations.py",
     "archive_timeline.py", "game_locator.py", "installed_mode.py", "intelligence.py", "lineup_prediction.py",
     "member_receiver.py", "model.py", "presence_audit.py", "observation_codec.py", "official_campaigns.py", "server.py",
     "season_seed.py", "share_protocol.py", "field-definitions.json", "Windows-Ocr.ps1",
@@ -48,7 +48,6 @@ def stage_payload(folder):
     shutil.copytree(ROOT / "static", dashboard / "static")
     shutil.copytree(ROOT / "catalog", dashboard / "catalog", ignore=shutil.ignore_patterns("garrison-*.png"))
     (folder / "Tools").mkdir()
-    shutil.copyfile(ROOT.parent / "Tools" / "Analyze-GameCapture.py", folder / "Tools" / "Analyze-GameCapture.py")
     # The development checkout still has account-specific defaults. An install
     # has a new local profile and must contain only neutral fallback values.
     defaults = (

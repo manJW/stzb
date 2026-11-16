@@ -115,8 +115,9 @@ def main():
     parity={file.name:sha(file) for file in sources}
     for name,value in parity.items():
         if sha(dashboard/name)!=value:raise ValueError('Source/package mismatch: '+name)
-    manifest={'format':3,'version':'0.2.4','backend_modules':parity,'seed_scope':None,'account_independent':True,
+    manifest={'format':3,'version':'0.2.7','backend_modules':parity,'seed_scope':None,'account_independent':True,
         'example_data_included':False,'runtime_origin':runtime_origin,
+        'bootstrap':'bundled-python-direct','code_signed':False,
         'electron':'45.3.1','python':'3.13.14','frida':'17.26.2','network':'loopback-only','runtime_pins':PINS}
     (payload/'build-manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf8')
     files=sorted(x for x in payload.rglob('*') if x.is_file())

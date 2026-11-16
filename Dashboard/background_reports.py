@@ -86,7 +86,8 @@ class BackgroundReports:
                 'alliance_reports': reader['alliance_reports'],
                 'priority': self.priority.snapshot() if self.priority else None,
                 'members':member_status,
-                'scope': '当前已核对角色、本赛季、'+role['report_scope']}
+                'scope': '当前已核对角色、本赛季、'+role['report_scope'],
+                'automatic_full_text':False,'detail_mode':'structured_fields'}
 
     def start(self, maximum=40):
         if type(maximum) is not int or not 1 <= maximum <= 200:
@@ -137,7 +138,7 @@ class BackgroundReports:
             if not active and moment>=self.reader_retry:
                 self.reader_retry=moment+60
                 self.reader.resume(self.data['maximum'],continuous=True,wait_for_ready=True)
-            self.data['reason']='个人模式：记录本人已发现战报并补齐全文，不汇总其他无组织玩家'
+            self.data['reason']='个人模式：记录本人已发现战报并补齐队伍资料，不汇总其他无组织玩家'
             self.data['members']={'status':'not_applicable','count':0}
             return
         member_status=self.data.get('members')or{}
@@ -170,7 +171,7 @@ class BackgroundReports:
             self.reader_retry = moment + 60
             self.reader.resume(self.data['maximum'], continuous=True, wait_for_ready=True)
         with self.lock:
-            self.data['reason'] = '后台自动采集：检查最新战报、历史翻页，优先补双方主力全文'
+            self.data['reason'] = '后台自动采集：检查最新战报、历史翻页，优先补齐双方主力资料；不单独补采正文'
 
     def _run(self):
         while not self.closed.is_set():

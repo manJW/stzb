@@ -78,7 +78,8 @@ class PriorityTests(unittest.TestCase):
         self.assertEqual(self.priority.events[A]['battle_id'],'3')
         self.assertIn('lineup_ready_at',self.priority.events[A])
         self.assertNotIn('lineup_ready_at',self.priority.events[B])
-        self.assertEqual(self.priority.events[A]['status'],'waiting')
+        self.assertEqual(self.priority.events[A]['status'],'done')
+        enriched=self.enriched.count(A)
         version=self.priority.updates[A]
         self.assertFalse(self.priority.displayed(B,version))
         self.assertFalse(self.priority.displayed(A,'another-version'))
@@ -87,6 +88,7 @@ class PriorityTests(unittest.TestCase):
         self.archive.ingest(11,{'battle_id':3,'report':'full'},time.time())
         self.priority.events[A]['next_check']=0;self.priority.step()
         self.assertEqual(self.priority.events[A]['status'],'done')
+        self.assertEqual(self.enriched.count(A),enriched,'No extra enrichment is sent only to obtain text')
 
     def test_old_initial_rest_and_changed_owner_do_not_trigger_or_keep_old_identity(self):
         self.observe(A,7,begin=int(self.now)-1000);self.priority.step()

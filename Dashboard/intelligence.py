@@ -6,7 +6,7 @@ import re
 import time
 
 from archive import digest, integers, number, packed
-from combat_loadout import SKILLS, named_hero, side_heroes
+from combat_loadout import SKILLS, named_hero, side_heroes, structured_report_complete
 from lineup_prediction import archived_march_key, meets_main_threshold, review_report, troop_total
 from model import write_json
 from observation_codec import coord, map_troop_codes, report_has_npc, report_system_npc, report_troop_codes, troop_families
@@ -254,12 +254,31 @@ class Intelligence:
         return {"profile_id": self.profile_id, "union_id": str(self.archive.profile["union_id"])}
 
     def seed_alliance_details(self):
-        inserted = self.db.execute(f"""INSERT OR IGNORE INTO report_read_jobs
-            (profile_id,kind,battle_id,state,attempts,queued_at,updated_at)
-            SELECT b.profile_id,'detail',b.battle_id,'queued',0,b.observed_at,b.observed_at
+        candidates=self.db.execute(f"""SELECT b.battle_id,b.data,b.observed_at
             FROM battle_reports b WHERE b.profile_id=:profile_id AND :union_id NOT IN ('','0') AND {ALLIANCE_REPORT}
-            AND NOT EXISTS(SELECT 1 FROM report_bodies f WHERE f.profile_id=b.profile_id AND f.battle_id=b.battle_id)""",
-            self.alliance_report_params()).rowcount
+            AND NOT EXISTS(SELECT 1 FROM report_read_jobs j WHERE j.profile_id=b.profile_id
+                AND j.battle_id=b.battle_id AND j.kind='detail')""",self.alliance_report_params()).fetchall()
+        inserted=0
+        for row in candidates:
+            if not structured_report_complete(json.loads(row['data'])):
+                inserted+=self.db.execute("INSERT OR IGNORE INTO report_read_jobs(profile_id,kind,battle_id,state,attempts,queued_at,updated_at) VALUES(?,'detail',?,'queued',0,?,?)",
+                    (self.profile_id,row['battle_id'],row['observed_at'],row['observed_at'])).rowcount
+        # Retire old text-only jobs, including failed/paused ones. A saved body
+        # does not satisfy missing structured fields; those reads may resume.
+        retired=requeued=0
+        for row in self.db.execute('''SELECT j.battle_id,j.state,j.attempts,b.data FROM report_read_jobs j
+            LEFT JOIN battle_reports b ON b.profile_id=j.profile_id AND b.battle_id=j.battle_id
+            WHERE j.profile_id=? AND j.kind='detail' ''',(self.profile_id,)).fetchall():
+            complete=bool(row['data'] and structured_report_complete(json.loads(row['data'])))
+            if complete and row['state']!='done':
+                self.db.execute("UPDATE report_read_jobs SET state='done',last_error=NULL,updated_at=? WHERE profile_id=? AND kind='detail' AND battle_id=?",
+                    (time.time(),self.profile_id,row['battle_id']))
+                retired+=1
+            elif not complete and row['state']=='done' and row['attempts']<3:
+                self.db.execute("UPDATE report_read_jobs SET state='queued',last_error=NULL,updated_at=? WHERE profile_id=? AND kind='detail' AND battle_id=?",
+                    (time.time(),self.profile_id,row['battle_id']))
+                requeued+=1
+        self.detail_queue_reconciliation={'retired_text_only_jobs':retired,'requeued_missing_details':requeued,'new_missing_details':inserted}
         candidates = self.db.execute("""SELECT battle_id,priority FROM report_read_jobs
             WHERE profile_id=? AND kind='detail' AND state='queued' AND priority<=?""",
             (self.profile_id, MAIN_DETAIL_PRIORITY)).fetchall()
@@ -280,6 +299,11 @@ class Intelligence:
             WHERE profile_id=? AND battle_id=? AND kind='detail' AND state='queued' AND priority<=?""",
             ((*update, MAIN_DETAIL_PRIORITY) for update in updates))
         return inserted
+
+    def detail_received(self,bid):
+        row=self.db.execute('SELECT data FROM battle_reports WHERE profile_id=? AND battle_id=?',
+            (self.profile_id,str(bid))).fetchone()
+        return bool(row and structured_report_complete(json.loads(row['data'])))
 
     def alliance_report_coverage(self):
         return dict(self.db.execute(f"""SELECT COUNT(*) AS reports, COUNT(f.battle_id) AS full_reports
@@ -333,10 +357,10 @@ class Intelligence:
                   json_extract(c.features,'$.'||c.side||'_hero_type') AS troop_raw
                 FROM combat_sides c JOIN combat_sides p ON p.profile_id=c.profile_id AND p.battle_id=c.battle_id AND p.side<>c.side
                 WHERE c.profile_id=? AND c.union_id=? AND c.player_name=? AND c.player_key=? AND p.union_id=?
-                AND c.npc=0 AND c.hero_key<>'' AND NOT EXISTS (
-                    SELECT 1 FROM report_bodies f WHERE f.profile_id=c.profile_id AND f.battle_id=c.battle_id)
+                AND c.npc=0 AND c.hero_key<>''
                 ORDER BY c.event_at DESC,CAST(c.battle_id AS INTEGER) DESC''', (self.profile_id, union, name, player, own))
             for report in reports:
+                if self.detail_received(report['battle_id']):continue
                 codes = report_troop_codes(report['troop_raw'], report['side'])
                 if codes not in patterns:
                     continue
@@ -352,8 +376,11 @@ class Intelligence:
         if kind not in ("profile", "detail") or not str(bid).isdigit() or not 0 < int(bid) <= 9223372036854775807:
             raise ValueError("战报读取参数无效")
         bid = str(int(bid))
-        table = "battle_reports" if kind == "profile" else "report_bodies"
-        if self.db.execute(f"SELECT 1 FROM {table} WHERE profile_id=? AND battle_id=?", (self.profile_id, bid)).fetchone():
+        received=(self.db.execute("SELECT 1 FROM battle_reports WHERE profile_id=? AND battle_id=?",(self.profile_id,bid)).fetchone()
+                  if kind=='profile' else self.detail_received(bid))
+        if received:
+            if kind=='detail':
+                self.db.execute("UPDATE report_read_jobs SET state='done',last_error=NULL WHERE profile_id=? AND kind='detail' AND battle_id=? AND state<>'done'",(self.profile_id,bid))
             return False
         known = self.db.execute("SELECT 1 FROM battle_reports WHERE profile_id=? AND battle_id=? UNION SELECT 1 FROM live_army_report_refs WHERE profile_id=? AND battle_id=? LIMIT 1",
             (self.profile_id, bid, self.profile_id, bid)).fetchone()
@@ -362,6 +389,8 @@ class Intelligence:
         at = time.time() if at is None else at
         changed = self.db.execute("INSERT OR IGNORE INTO report_read_jobs(profile_id,kind,battle_id,state,attempts,queued_at,updated_at,last_error,priority) VALUES(?,?,?,?,?,?,?,?,?)",
             (self.profile_id, kind, bid, "queued", 0, at, at, None, priority)).rowcount
+        if kind=='detail':
+            changed+=self.db.execute("UPDATE report_read_jobs SET state='queued',last_error=NULL,updated_at=? WHERE profile_id=? AND kind='detail' AND battle_id=? AND state='done' AND attempts<3",(at,self.profile_id,bid)).rowcount
         if retry:
             changed += self.db.execute("UPDATE report_read_jobs SET state='queued',last_error=NULL,updated_at=? WHERE profile_id=? AND kind=? AND battle_id=? AND state IN ('failed','paused') AND attempts<3",
                 (time.time(), self.profile_id, kind, bid)).rowcount
@@ -945,6 +974,7 @@ class Intelligence:
                 {str(data.get(k)) for k in ("attack_unionid", "defend_unionid")} - {"0", "None", ""})
             return {"profile_id": self.profile_id, "profile": data, "campaign": campaign,
                 "battle_id": str(bid), "sides": sides, "full_report": body_data, "brief_report": brief_data,
+                "details_complete": structured_report_complete(data),
                 "lineup_review": review_report(self.db, self.profile_id, str(bid)),
                 "sources": self.archive.record_sources("report", str(bid), row["message_ref"], row["observed_at"])}
 

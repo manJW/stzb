@@ -217,7 +217,7 @@ class BackgroundTests(unittest.TestCase):
         self.assertEqual(other.snapshot()['new_reports'],1)
         other.close();reader.close()
 
-    def test_failed_job_retries_are_bounded_and_dedup_skips_existing_full(self):
+    def test_failed_job_retries_are_bounded_and_dedup_requires_structured_details(self):
         self.archive.ingest(92, page(100), time.time())
         reader = ReportEvidenceReader(self.archive, self.bridge, lambda: None, False)
         reader.resume(10, continuous=True)
@@ -227,6 +227,9 @@ class BackgroundTests(unittest.TestCase):
         row = self.archive.db.execute('SELECT state,attempts FROM report_read_jobs').fetchone()
         self.assertEqual(tuple(row), ('failed', 3))
         self.archive.ingest(11, {'battle_id': 100, 'report': 'actual full text'}, time.time())
+        self.assertFalse(reader._received('detail',100),'A saved numeric body cannot satisfy missing hero fields')
+        from test_intelligence import complete_battle
+        self.archive.ingest(10,[[complete_battle(100)]],time.time())
         with self.archive.lock, self.archive.db:
             self.archive.db.execute("UPDATE report_read_jobs SET state='queued'")
         reader._step()

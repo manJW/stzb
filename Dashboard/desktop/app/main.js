@@ -41,9 +41,20 @@ function saveWindow() {
 async function ensureService() {
   if (starting) return starting;
   starting = (async () => {
-    if (config.installed) {
-      const {installedService} = require('./installed-service');
-      origin = await installedService({workspace:workspaceRoot, launcher:path.resolve(__dirname,config.serviceLauncher), log, status:text=>send('desktop:status',{text,tone:'waiting'})});
+    if (config.portable || config.installed) {
+      const options={workspace:workspaceRoot,log,
+        status:text=>send('desktop:status',{text,tone:'waiting'}),
+        confirmDriver:async()=>{const result=await dialog.showMessageBox(mainWindow,{type:'info',title:'首次采集准备',
+          message:'首次采集需要 Wireshark/Npcap 驱动',detail:'将打开随包的官方安装程序。请保留 Npcap 选项，并自行确认许可、管理员或重启提示。',
+          buttons:['打开官方安装程序','稍后再说'],defaultId:0,cancelId:1});return result.response===0;},
+        openDriver:file=>shell.openPath(file)};
+      if(config.portable){
+        const {nativeService}=require('./portable-service');
+        origin=await nativeService({...options,program:path.resolve(__dirname,config.programRoot),distribution:'portable'});
+      }else{
+        const {installedService}=require('./installed-service');
+        origin=await installedService({...options,launcher:path.resolve(__dirname,config.serviceLauncher)});
+      }
       return;
     }
     try { await probeService(origin); return; } catch (error) {
@@ -171,6 +182,10 @@ function updateTray() {
     {label:'赛季档案',click:() => { restoreWindow();showRoute('archive').catch(showError); }},
     {type:'separator'},
     {label:'退出客户端（保留后台采集）',click:() => { quitting=true;app.quit(); }},
+    ...(config.portable?[{label:'退出便携版（停止后台）',click:async()=>{
+      try{const {stopPortableService}=require('./portable-service');await stopPortableService({workspace:workspaceRoot,program:path.resolve(__dirname,config.programRoot)});quitting=true;app.quit();}
+      catch(error){showError(error);}
+    }}]:[]),
   ]));
 }
 

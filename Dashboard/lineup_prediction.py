@@ -7,11 +7,11 @@ from contextlib import nullcontext
 from statistics import median
 
 from combat_loadout import forecast_heroes, hero_name, skill_slots_by_position
-from lineup_current import card_identity, resolve_current_report
+from lineup_current import card_identity, resolve_current_report, current_troop_codes
 from observation_codec import digest, map_troop_codes, number, packed, report_troop_codes, short_lineup_hero_count, troop_families
 
 
-MODEL_VERSION = '32'
+MODEL_VERSION = '34'
 MAIN_MIN_LEVEL = 40
 SIEGE_SKILL_IDS = frozenset((200187, 200663))  # 冲车、云梯
 LOW_FORCE_MAX_AGE = 3600
@@ -30,7 +30,8 @@ LOADOUT_FIELDS = """json_extract(c.features,'$.'||c.side||'_advance') AS advance
     json_extract(c.features,'$.'||c.side||'_idu') AS idu_raw,
     json_extract(c.features,'$.'||c.side||'_role_id') AS role_raw,
     json_extract(c.features,'$.'||c.side||'er_gear_info') AS gear_raw,
-    json_extract(c.features,'$.'||c.side||'_hero_type') AS troop_raw"""
+    json_extract(c.features,'$.'||c.side||'_hero_type') AS troop_raw,
+    json_extract(c.features,'$.'||c.side||'_all_hero_info') AS hero_info_raw"""
 
 
 def player_history(db, profile, name, union, *, include_pve=True):
@@ -507,7 +508,7 @@ def predict(row, history, known_at, *, use_identity=True, use_speed=True):
         if resolution:
             output['current_resolution'] = resolution
             heroes = forecast_heroes(current_report)
-            codes = report_troop_codes(current_report['troop_raw'], current_report['side'])
+            codes = current_troop_codes(current_report)
             match = troop_match(live_codes, codes)
             output['force'] = last_force_observation((current_report, heroes,
                 association if current_report is anchor else 'same_cards', match, codes),
@@ -589,7 +590,7 @@ def predict(row, history, known_at, *, use_identity=True, use_speed=True):
     if selected_id and selected is None:
         unresolved = True
         output['current_resolution'] = {**(output.get('current_resolution') or {}),
-            'battle_id':selected_id, 'unresolved':'incomplete_roster'}
+            'battle_id':selected_id, 'unresolved':(output.get('current_resolution') or {}).get('unresolved') or 'incomplete_roster'}
     output['current_report_id'] = selected_id
     if selected is not None and not unresolved:
         if not selected.get('hero_key'):

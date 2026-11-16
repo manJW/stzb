@@ -63,7 +63,8 @@ def check_army(db, profile, row, history, at, *, archive_type=Archive, predictor
             sides = db.execute('''SELECT side,heroes,features FROM combat_sides INDEXED BY sqlite_autoindex_combat_sides_1 WHERE profile_id=?
                 AND battle_id=? AND player_key=? AND union_id=?''',
                 (profile,archive_id,records[0]['player_key'],records[0]['union_id'])).fetchall() if records else []
-            displayed = side_heroes(json.loads(sides[0]['heroes']),sides[0]['side'],json.loads(sides[0]['features'])) if len(sides)==1 else None
+            displayed = (evidence.get('current_heroes') or
+                side_heroes(json.loads(sides[0]['heroes']),sides[0]['side'],json.loads(sides[0]['features']))) if len(sides)==1 else None
             lead = next((r for r in prediction['items'] if r['battle_id']==prediction_id), None)
             if not records or displayed is None or not lead:
                 issues.append('known_roster_not_displayed')

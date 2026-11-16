@@ -1,4 +1,4 @@
-"""Fill missing report bodies through the visible PC battle report list."""
+"""Fill missing structured fields through the visible PC battle report list."""
 import json
 import logging
 import re
@@ -248,7 +248,7 @@ class ReportBackfill:
             if self.progress['since'] is None:
                 write_json(self.path, {'since': since})
             self.cancel.clear()
-            self.progress.update(active=True, reason='监听新战报，游戏在前台且空闲时读取全文', since=since)
+            self.progress.update(active=True, reason='监听新战报，游戏空闲时补齐队伍资料', since=since)
             self.thread = threading.Thread(target=self.run, args=(maximum, self.archive.profile_id, since),
                                            name='game-report-backfill', daemon=True)
             self.thread.start()
@@ -283,8 +283,6 @@ class ReportBackfill:
                 WHERE a.profile_id=? AND a.side='attack' AND a.event_at>=? AND a.wid>0
                 AND a.npc=0 AND b.npc=0 AND a.player_name<>'' AND b.player_name<>''
                 AND (a.union_id=? OR b.union_id=?)
-                AND NOT EXISTS (SELECT 1 FROM report_bodies f WHERE f.profile_id=a.profile_id
-                    AND f.battle_id=a.battle_id AND f.body<>'')
                 ORDER BY a.event_at DESC,CAST(a.battle_id AS INTEGER) DESC''',
                 (profile, since, str(self.archive.profile['union_id']), str(self.archive.profile['union_id']))).fetchall()
             gaps = self.archive.intelligence.main_report_gaps()['items'] if rows else []
@@ -292,6 +290,8 @@ class ReportBackfill:
         now = time.monotonic()
         targets = []
         for row in rows:
+            with self.archive.lock:
+                if self.archive.intelligence.detail_received(row['battle_id']):continue
             if deferred.get(row['battle_id'], 0) > now:
                 continue
             target = dict(row)
@@ -308,8 +308,7 @@ class ReportBackfill:
 
     def received(self, profile, battle_id):
         with self.archive.lock:
-            return self.archive.db.execute("SELECT 1 FROM report_bodies WHERE profile_id=? AND battle_id=? AND body<>''",
-                                           (profile, battle_id)).fetchone() is not None
+            return profile==self.archive.profile_id and self.archive.intelligence.detail_received(battle_id)
 
     def poll(self, maximum, profile, since, connection, deferred):
         def check():
@@ -322,7 +321,7 @@ class ReportBackfill:
 
         with TrialGame(connection) as game:
             if game.foreground() != game.hwnd or game.idle() < 4000:
-                return '正在监听，等游戏处于前台且鼠标键盘空闲后读取全文'
+                return '正在监听，游戏空闲后补齐队伍资料'
             game.input_marker = game.input_tick()
             with WindowsOcr() as ocr:
                 reports = ReportList(game, ocr, check)
@@ -346,7 +345,7 @@ class ReportBackfill:
                             self.progress['skipped'] += 1
                         logging.info('Report %s will be retried: %s', battle_id, error)
                         continue
-                    self.update(reason=f'等待全文 {battle_id} 入库')
+                    self.update(reason=f'等待队伍资料 {battle_id} 入库')
                     deadline = time.monotonic() + 12
                     while not self.received(profile, battle_id):
                         check()

@@ -35,6 +35,12 @@ def battle(bid=1, at=300, result=0, *, main=False):
         "npc": 0, "result": result, "attacker_gear_info": "raw-gear-evidence", "weather": 3}
 
 
+def complete_battle(bid=1,at=300):
+    record=battle(bid,at,main=True)
+    record.update(attack_advance='0,0,0,0,0,0;'*4,defend_advance='0,0,0,0,0,0;'*4)
+    return record
+
+
 def world(bid=None, aid="9001", uid=200, name="enemy", union=1008, state=1, end=300):
     value = [None] * 34
     value[1] = {str(uid): [name, 0, union] + [0]*9 + [[0,0,"union"]] + [0]*15}
@@ -882,6 +888,9 @@ class IntelligenceTests(unittest.TestCase):
         self.assertEqual(result['missed_marches'], 3)
         self.assertEqual([(r['battle_id'], r['missed_marches']) for r in result['items']], [('9', 2), ('3', 1)])
         self.archive.ingest(92, [[{'battle_id':9, 'report':'full report'}]], 702)
+        self.assertEqual(intel.query('main-report-gaps',limit='1')['items'][0]['battle_id'],'9')
+        latest.update(attack_advance='0,0,0,0,0,0;'*4,defend_advance='0,0,0,0,0,0;'*4)
+        self.archive.ingest(10,[[latest]],703)
         self.assertEqual(intel.query('main-report-gaps', limit='1')['items'][0]['battle_id'], '2')
 
     def test_newer_personal_main_can_outweigh_a_conflicting_army_number(self):
@@ -1044,7 +1053,7 @@ class IntelligenceTests(unittest.TestCase):
             self.assertEqual(reader.snapshot()["alliance_reports"], {"reports": 2, "full_reports": 1})
             self.archive.ingest(92, [[battle(4)]], 303)
             self.assertEqual([r[0] for r in self.archive.db.execute("""SELECT battle_id FROM report_read_jobs
-                WHERE kind='detail' ORDER BY battle_id""")], ["1", "4"])
+                WHERE kind='detail' ORDER BY battle_id""")], ["1", "2", "4"])
             self.assertEqual(self.archive.intelligence.seed_alliance_details(), 0)
         finally:
             reader.close()
@@ -1148,7 +1157,7 @@ class IntelligenceTests(unittest.TestCase):
         self.archive.ingest(5028,world(bid=1),200)
         calls=[]
         def profiles(ids):
-            calls.append(("profile",ids));self.archive.ingest(10,[0,[battle(x) for x in ids]],301)
+            calls.append(("profile",ids));self.archive.ingest(10,[0,[complete_battle(x) for x in ids]],301)
         def detail(bid):
             calls.append(("detail",bid));self.archive.ingest(6231,{"battle_id":bid,"report":"full"},302)
         reader=ReportEvidenceReader(self.archive,SimpleNamespace(fetch_profiles=profiles,fetch_battle_detail=detail),lambda:None,False)
@@ -1156,8 +1165,8 @@ class IntelligenceTests(unittest.TestCase):
         reader._step();self.assertEqual(len(calls),1)
         reader.not_before=0;reader._step();reader.not_before=0;reader._step()
         self.assertFalse(reader.snapshot()["active"])
-        self.assertEqual(calls,[("profile",[1]),("detail",1)])
-        self.assertEqual(self.archive.intelligence.report(1)["full_report"]["body"],"full")
+        self.assertEqual(calls,[("profile",[1])])
+        self.assertIsNone(self.archive.intelligence.report(1)["full_report"])
         with self.assertRaises(ValueError):reader.enqueue([999])
         reader.close()
 
@@ -1178,9 +1187,9 @@ class IntelligenceTests(unittest.TestCase):
         with self.archive.lock,self.archive.db:
             self.archive.intelligence.queue_evidence("detail",2,retry=True)
         calls=[]
-        def detail(bid):
-            calls.append(bid);self.archive.ingest(6231,{"battle_id":bid,"report":"full"},303)
-        reader=ReportEvidenceReader(self.archive,SimpleNamespace(fetch_profiles=lambda ids:None,fetch_battle_detail=detail),lambda:None,False)
+        def profiles(ids):
+            calls.extend(ids);self.archive.ingest(10,[[complete_battle(bid) for bid in ids if bid==2]],303)
+        reader=ReportEvidenceReader(self.archive,SimpleNamespace(fetch_profiles=profiles),lambda:None,False)
         reader.resume(3);reader._step()
         self.assertEqual(calls,[2])
         reader.close()
@@ -1221,8 +1230,10 @@ class IntelligenceTests(unittest.TestCase):
         self.archive.ingest(5028,w,200);self.archive.ingest(92,[[battle(2)]],301)
         with self.archive.lock,self.archive.db:self.archive.intelligence.queue_evidence("detail",2)
         saved=[]
-        def detail(bid):saved.append(bid);self.archive.ingest(6231,{"battle_id":bid,"report":"full"},302)
-        reader=ReportEvidenceReader(self.archive,SimpleNamespace(fetch_profiles=lambda ids:None,fetch_battle_detail=detail),lambda:None,False)
+        def profiles(ids):
+            for bid in ids:
+                if bid==2:saved.append(bid);self.archive.ingest(10,[[complete_battle(bid)]],302)
+        reader=ReportEvidenceReader(self.archive,SimpleNamespace(fetch_profiles=profiles),lambda:None,False)
         reader.RESPONSE_TIMEOUT=0;reader.resume(5,continuous=True)
         for _ in range(3):reader.not_before=0;reader._step()
         self.assertTrue(reader.snapshot()["profile_temporarily_blocked"])

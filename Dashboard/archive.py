@@ -926,6 +926,8 @@ class Archive:
                 exact = []
             if latest:
                 evidence.update(current_resolution=resolution, current_report_id=latest['battle_id'])
+                if latest.get('_resolved_heroes') is not None:
+                    evidence['current_heroes']=latest['_resolved_heroes']
                 if resolution.get('unresolved'):
                     return [], 'current_report_incomplete', evidence
                 instances = integers(latest.get('idu_raw'))
@@ -1050,7 +1052,9 @@ class Archive:
                         side, raw_heroes, features = sides[0]
                         heroes = json.loads(raw_heroes) if kind == 'army_lineups' else item["data"]["heroes"]
                         features = json.loads(features)
-                        item["data"]["heroes"] = side_heroes(heroes, side, features)
+                        item["data"]["heroes"] = (evidence['current_heroes'] if kind=='army_lineups'
+                            and item['battle_id']==evidence.get('current_report_id') and evidence.get('current_heroes')
+                            else side_heroes(heroes, side, features))
                         item["data"]["army_group_name"] = features.get(side+'_army_group') or ''
                         if kind=='army_lineups' and item['data']['army_group_name'] and match in ('exact_army_id','matched_arrival','same_card_instances'):
                             membership = self.db.execute('''SELECT json_extract(data,'$[6]') FROM army_states

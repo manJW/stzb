@@ -8,7 +8,7 @@ from test_support import Archive
 from lineup_prediction import player_history, predict, record_forecast
 from evidence_reader import ReportEvidenceReader
 from types import SimpleNamespace
-from test_intelligence import battle
+from test_intelligence import battle,complete_battle
 
 
 class LatestLiveTests(unittest.TestCase):
@@ -120,14 +120,14 @@ class LatestLiveTests(unittest.TestCase):
         outcomes = {r[0] for r in self.archive.db.execute('SELECT DISTINCT outcome FROM combat_sides')}
         self.assertEqual(outcomes, {'win','loss','draw'})
 
-    def test_ordinary_battle_full_text_is_not_starved_by_priority_main_jobs(self):
+    def test_ordinary_structured_details_are_not_starved_by_priority_main_batches(self):
         for bid in range(1, 10):
             self.archive.ingest(92, [[self.report(bid, 100 + bid, main=bid != 1)]], 120)
         saved = []
-        def fetch(bid):
-            saved.append(bid)
-            self.archive.ingest(11, {'battle_id':bid, 'report':f'full {bid}'}, 130)
-        reader = ReportEvidenceReader(self.archive, SimpleNamespace(fetch_battle_detail=fetch), lambda:None, False)
+        def fetch(ids):
+            saved.extend(ids)
+            self.archive.ingest(10,[[complete_battle(bid)for bid in ids]],130)
+        reader = ReportEvidenceReader(self.archive, SimpleNamespace(fetch_profiles=fetch), lambda:None, False)
         try:
             # Use explicit priorities so this tests scheduling independently of classifiers.
             with self.archive.db:
@@ -135,9 +135,9 @@ class LatestLiveTests(unittest.TestCase):
             reader.resume(30, continuous=True)
             for _ in range(6):
                 reader.not_before = 0; reader._step()
-            self.assertEqual(saved[:5], [9,8,7,6,5])
-            self.assertEqual(saved[5], 1)
+            self.assertEqual(saved,list(range(9,0,-1)))
             self.assertEqual(self.archive.db.execute('SELECT COUNT(*) FROM battle_reports').fetchone()[0], 9)
+            self.assertEqual(self.archive.db.execute('SELECT COUNT(*) FROM report_bodies').fetchone()[0],0)
         finally:
             reader.close()
 

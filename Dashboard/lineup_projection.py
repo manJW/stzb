@@ -7,7 +7,7 @@ import time
 from collections import OrderedDict
 
 
-VERSION = '1'
+VERSION = '2'
 VERIFIED = {'exact_army_id', 'matched_arrival', 'same_card_instances'}
 
 

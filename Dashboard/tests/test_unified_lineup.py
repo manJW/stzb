@@ -89,6 +89,16 @@ class UnifiedLineupTests(unittest.TestCase):
         self.assertIsNone(prediction['display_report'])
         self.assertEqual(single['items'],[])
 
+    def test_complete_roster_with_changed_troops_keeps_conflict_reason_and_stays_unverified(self):
+        self.archive.ingest(92,[[report(2,300,army=ARMY)]],310)
+        self.row['troops']=[{'code':c}for c in (31,12,31)]
+        prediction,single=self.views()
+        self.assertIsNone(prediction['display_report'])
+        self.assertEqual(single['items'],[])
+        self.assertTrue(prediction['current_resolution']['complete_roster'])
+        self.assertEqual(prediction['current_resolution']['unresolved'],'troop_conflict')
+        self.assertNotEqual(prediction['display_reason'],'incomplete_roster')
+
     def test_legion_members_keep_personal_identity_and_badge(self):
         self.row['army_group_id']='legion'
         prediction,single=self.views()

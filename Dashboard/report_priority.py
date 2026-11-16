@@ -140,8 +140,9 @@ class ReportPriority:
                     version=ready['battle_id']+':'+ready['configuration_hash']
                     if self.updates.get(aid)!=version:
                         self.updates[aid]=version;self.updates.move_to_end(aid);changed=True
-                    if full:
-                        event.update(status='done',full_at=full[0]);changed=True;continue
+                    event['status']='done'
+                    if full:event['full_at']=full[0]
+                    changed=True;continue
                 if now>=event['deadline']:
                     event['status']='timed_out';changed=True;continue
                 # Enrichment only: no binding is created by requesting personal
