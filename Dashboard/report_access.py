@@ -107,6 +107,15 @@ class ReportAccess:
             self.admit(bid,at,'own_report_index')
 
     def defer_unlisted(self):
+        # Queue state may have come from another organization or an older
+        # process. The current scope's explicit refusal always takes precedence.
+        self.db.execute('''UPDATE report_read_jobs SET state='unavailable',last_error=(
+            SELECT a.error_text FROM report_read_access a WHERE a.profile_id=report_read_jobs.profile_id
+            AND a.scope_id=? AND a.battle_id=report_read_jobs.battle_id)
+          WHERE profile_id=? AND state NOT IN ('done','unavailable') AND EXISTS(
+            SELECT 1 FROM report_read_access a WHERE a.profile_id=report_read_jobs.profile_id
+            AND a.scope_id=? AND a.battle_id=report_read_jobs.battle_id
+            AND a.status IN ('expired','denied','unavailable'))''',(self.scope,self.profile,self.scope))
         # A scope change permits a new scope check, never inherits another
         # account/organization's rejection. Old local data is left untouched.
         self.db.execute('''UPDATE report_read_jobs SET state='awaiting_scope'

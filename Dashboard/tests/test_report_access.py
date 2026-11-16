@@ -145,6 +145,16 @@ class ReportAccessTests(unittest.TestCase):
         self.archive.profile['union_id']='new-organization'
         self.assertFalse(restarted.blocked(1));self.assertFalse(restarted.allowed(1))
 
+    def test_returning_to_rejected_scope_cannot_reuse_another_scopes_queued_job(self):
+        self.listed(1);self.step();original=self.archive.profile['union_id']
+        self.archive.profile['union_id']='another-organization'
+        self.listed(1);self.assertEqual(self.state(1),'queued')
+        self.archive.profile['union_id']=original
+        self.step()
+        self.assertEqual(self.state(1),'unavailable');self.assertEqual(self.calls,[[1]])
+        self.listed(2);self.mode='success';self.step()
+        self.assertEqual(self.state(2),'done');self.assertEqual(self.calls,[[1],[2]])
+
     def test_import_or_member_upload_does_not_establish_local_query_permission(self):
         for bid,source in ((1,'replay'),(2,'member:sample')):
             self.archive.ingest(92,[[battle(bid)]],time.time(),source=source)
