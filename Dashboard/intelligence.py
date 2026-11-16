@@ -93,6 +93,8 @@ class Intelligence:
         self.db.execute("""CREATE INDEX IF NOT EXISTS report_jobs_ready ON report_read_jobs
             (profile_id,priority DESC,CASE kind WHEN 'profile' THEN 0 ELSE 1 END,
              CAST(battle_id AS INTEGER) DESC,queued_at) WHERE state='queued'""")
+        from report_access import ReportAccess
+        self.report_access = ReportAccess(archive)
         self.db.commit()
 
     @property
@@ -382,21 +384,27 @@ class Intelligence:
             if kind=='detail':
                 self.db.execute("UPDATE report_read_jobs SET state='done',last_error=NULL WHERE profile_id=? AND kind='detail' AND battle_id=? AND state<>'done'",(self.profile_id,bid))
             return False
-        known = self.db.execute("SELECT 1 FROM battle_reports WHERE profile_id=? AND battle_id=? UNION SELECT 1 FROM live_army_report_refs WHERE profile_id=? AND battle_id=? LIMIT 1",
-            (self.profile_id, bid, self.profile_id, bid)).fetchone()
+        known = self.db.execute("""SELECT 1 FROM battle_reports WHERE profile_id=? AND battle_id=?
+            UNION SELECT 1 FROM live_army_report_refs WHERE profile_id=? AND battle_id=?
+            UNION SELECT 1 FROM live_own_report_indices WHERE profile_id=? AND battle_id=? LIMIT 1""",
+            (self.profile_id,bid,self.profile_id,bid,self.profile_id,bid)).fetchone()
         if not known:
             raise ValueError("只能读取当前档案已经观测到的战报编号")
+        if self.report_access.blocked(bid):
+            return False
         at = time.time() if at is None else at
+        state = 'queued' if self.report_access.allowed(bid) else 'awaiting_scope'
         changed = self.db.execute("INSERT OR IGNORE INTO report_read_jobs(profile_id,kind,battle_id,state,attempts,queued_at,updated_at,last_error,priority) VALUES(?,?,?,?,?,?,?,?,?)",
-            (self.profile_id, kind, bid, "queued", 0, at, at, None, priority)).rowcount
+            (self.profile_id, kind, bid, state, 0, at, at, None, priority)).rowcount
         if kind=='detail':
-            changed+=self.db.execute("UPDATE report_read_jobs SET state='queued',last_error=NULL,updated_at=? WHERE profile_id=? AND kind='detail' AND battle_id=? AND state='done' AND attempts<3",(at,self.profile_id,bid)).rowcount
+            changed+=self.db.execute("UPDATE report_read_jobs SET state=?,last_error=NULL,updated_at=? WHERE profile_id=? AND kind='detail' AND battle_id=? AND state='done' AND attempts<3",(state,at,self.profile_id,bid)).rowcount
         if retry:
-            changed += self.db.execute("UPDATE report_read_jobs SET state='queued',last_error=NULL,updated_at=? WHERE profile_id=? AND kind=? AND battle_id=? AND state IN ('failed','paused') AND attempts<3",
-                (time.time(), self.profile_id, kind, bid)).rowcount
+            cooldown = 15 if priority >= 200 else 300
+            changed += self.db.execute("UPDATE report_read_jobs SET state=?,last_error=NULL,updated_at=? WHERE profile_id=? AND kind=? AND battle_id=? AND state IN ('failed','paused') AND attempts<3 AND updated_at<?",
+                (state,time.time(),self.profile_id,kind,bid,time.time()-cooldown)).rowcount
             priority = max(priority, 100)
         if priority:
-            self.db.execute("UPDATE report_read_jobs SET priority=? WHERE profile_id=? AND kind=? AND battle_id=? AND state='queued' AND priority<?",
+            self.db.execute("UPDATE report_read_jobs SET priority=? WHERE profile_id=? AND kind=? AND battle_id=? AND state IN ('queued','awaiting_scope') AND priority<?",
                 (priority, self.profile_id, kind, bid, priority))
         return bool(changed)
 

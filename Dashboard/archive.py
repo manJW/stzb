@@ -429,7 +429,8 @@ class Archive:
             elif mid == 700:
                 self._union_list(value, observed_at)
             elif mid == 90005:
-                self._client_tables(value, observed_at, message_ref)
+                self._client_tables(value, observed_at, message_ref,
+                    allow_report_reads=source in ('live','pc-live','dashen-live','mumu-live'))
             for record in dictionaries(business):
                 if record.get("battle_id") and ("attack_name" in record or "defend_name" in record):
                     bid = str(record["battle_id"])
@@ -441,6 +442,8 @@ class Archive:
                                 stats["new_battle_ids"].append(bid)
                     self._keep_origin("battle_reports", "report", bid)
                     self._sight("report", bid, source_id, observed_at)
+                    if source in ('live','pc-live','dashen-live','mumu-live'):
+                        self.intelligence.report_access.observe_report(mid,record,observed_at)
                     self._battle(record, observed_at, message_ref, shared=source_id != "local")
                 if record.get("battle_id") and isinstance(record.get("report"), str) and record["report"].strip():
                     bid = str(record["battle_id"])
@@ -456,7 +459,7 @@ class Archive:
         # The callback receives counts only after the transaction successfully commits.
         return stats
 
-    def _client_tables(self, value, at, ref):
+    def _client_tables(self, value, at, ref, allow_report_reads=False):
         allowed = {"Tb_army", "Tb_hero", "Tb_army_alert", "Tb_battle_report_attack", "Tb_battle_report_defend"}
         for operation, table, body in table_updates(value):
             if table not in allowed or not body:
@@ -483,6 +486,10 @@ class Archive:
                 join_id_raw=excluded.join_id_raw,observed_at=excluded.observed_at,message_ref=excluded.message_ref
                 WHERE excluded.observed_at>={target}.observed_at''',
                 (self.profile_id, str(bid), "attack", str(aid), str(uid), packed(heroes), wid, number(body[4]), at, ref))
+            if allow_report_reads:
+                self.intelligence.report_access.personal_index(bid,uid,at)
+                if self.intelligence.report_access.allowed(bid):
+                    self.intelligence.queue_evidence('profile',bid,at)
             report = self.db.execute("SELECT data,observed_at,message_ref FROM battle_reports WHERE profile_id=? AND battle_id=?",
                 (self.profile_id, str(bid))).fetchone()
             if report:

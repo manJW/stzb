@@ -1155,6 +1155,8 @@ class IntelligenceTests(unittest.TestCase):
 
     def test_reader_requires_received_data_and_respects_budget_and_pause(self):
         self.archive.ingest(5028,world(bid=1),200)
+        # A live own-report index establishes read scope independently of the map reference.
+        self.archive.intelligence.report_access.admit(1,200,'own_report_index')
         calls=[]
         def profiles(ids):
             calls.append(("profile",ids));self.archive.ingest(10,[0,[complete_battle(x) for x in ids]],301)
@@ -1172,6 +1174,7 @@ class IntelligenceTests(unittest.TestCase):
 
     def test_ack_without_saved_data_cannot_complete_reader_job(self):
         self.archive.ingest(5028,world(bid=1),200)
+        self.archive.intelligence.report_access.admit(1,200,'own_report_index')
         reader=ReportEvidenceReader(self.archive,SimpleNamespace(fetch_profiles=lambda ids:None),lambda:None,False)
         reader.RESPONSE_TIMEOUT=0
         reader.resume(1);reader._step()
@@ -1228,6 +1231,8 @@ class IntelligenceTests(unittest.TestCase):
     def test_unavailable_profile_batches_defer_only_profiles_and_do_not_block_full_reports(self):
         w=world();w[6]["9001"][31]=";".join(f"{bid},1,1,1,1,0" for bid in range(100,131))+";"
         self.archive.ingest(5028,w,200);self.archive.ingest(92,[[battle(2)]],301)
+        for bid in range(100,131):
+            self.archive.intelligence.report_access.admit(bid,200,'own_report_index')
         with self.archive.lock,self.archive.db:self.archive.intelligence.queue_evidence("detail",2)
         saved=[]
         def profiles(ids):

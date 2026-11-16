@@ -2,19 +2,23 @@
 
 前端、Python 后端、Electron 客户端、Windows 安装构建脚本，以及可恢复的历史业务数据库。
 
-当前客户端版本：**0.2.7**。源码快照日期：**2026-11-16**。
+当前客户端版本：**0.2.8**。源码快照日期：**2026-11-16**。
 
 ## 下载客户端
 
-请从 [v0.2.7 Releases](https://github.com/manJW/stzb/releases/tag/v0.2.7) 下载：
+请从 [v0.2.8 Releases](https://github.com/manJW/stzb/releases/tag/v0.2.8) 下载：
 
-- 安装版：`STZB-Battlefield-Desktop-Setup-0.2.7-universal-x64.exe`
-- 免安装版：`STZB-Battlefield-Portable-0.2.7-x64.zip`，解压全部文件后打开「率土战场.exe」。
+- 安装版：`STZB-Battlefield-Desktop-Setup-0.2.8-universal-x64.exe`
+- 免安装版：`STZB-Battlefield-Portable-0.2.8-x64.zip`，解压全部文件后打开「率土战场.exe」。
 - `SHA256SUMS.txt`：核对下载文件完整性。
 
 安装版和免安装版共用内置 Python 的直接启动入口，自动发现采集驱动并核对当前角色、区服和赛季。
 两版升级均保留 Workspace 数据；旧版后台只在确认目录和进程归属后正常保存退出。
 免安装版的看板无需安装，但首次采集仍需要 Wireshark/Npcap 驱动。
+
+0.2.8 修复战报过期提示反复出现：逐条关联实际请求和游戏返回，仅对当前账号及组织范围内明确拒绝的编号停止自动重试。
+行军里出现编号不直接代表有查询权限；未确认范围及普通超时不误标为过期，最新战报刷新及其他队伍资料继续采集。
+读取拒绝记录随 Workspace 保留，已有战报、正文及统计资料保留。
 
 **当前发行包未签名**，浏览器或 Windows 仍可能提示下载信誉不足。ZIP、哈希校验和本机扫描均不能保证其他电脑不拦截。
 签名所缺材料及发布检查见 [签名与发布说明](Dashboard/windows-install/签名与发布说明.md)。

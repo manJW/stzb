@@ -128,6 +128,8 @@ class BackgroundReports:
             self.reader.prioritize_army(self.focus_provider())
         if self.priority:
             self.priority.step()
+        if self.reader.scope_refresh_due():
+            self.harvester.request_latest()
         moment = time.monotonic()
         if str(self.archive.profile['union_id'])in ('','0'):
             # Union zero is not a group. Keep filling observed personal report

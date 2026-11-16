@@ -310,6 +310,7 @@ class Collector:
         self.stop_event = threading.Event()
         self.process = None
         self.report_observer = None
+        self.evidence_observer = None
         self.relation_observer = None
         self.thread = threading.Thread(target=self.run, daemon=True, name="game-collector")
         self.map_recovery = None
@@ -356,6 +357,8 @@ class Collector:
                     log.write(f"{time.time():.0f} {mid} {type(error).__name__}: {str(error)[:160]}\n")
         if mid == 92 and self.report_observer and stats is not None:
             self.report_observer.on_page(value, observed_at, stats)
+        if getattr(self,'evidence_observer',None):
+            self.evidence_observer.on_message(mid,value,observed_at)
         self.state.apply(mid, value, observed_at)
         if mid in (6326,6327) and self.relation_observer:
             try:
@@ -373,6 +376,8 @@ class Collector:
         # No client headers or unrelated request bodies leave the in-memory framer.
         if mid == 92 and self.report_observer:
             self.report_observer.on_request(value, observed_at)
+        if getattr(self,'evidence_observer',None):
+            self.evidence_observer.on_request(mid,value,observed_at)
         if self.game_click_focus:
             self.game_click_focus.on_request(mid, value, observed_at)
 
@@ -418,6 +423,8 @@ class Collector:
                           f"dst host {connection['local']} and tcp dst port {int(connection['local_port'])}")
         observe_requests = (self.source == "pc" and self.report_observer is not None) or self.source == "dashen"
         request_ids = ({21, 92} if self.report_observer is not None else {21}) if self.source == "dashen" else {92}
+        if getattr(self,'evidence_observer',None):
+            request_ids = request_ids | {10}
         if observe_requests:
             capture_filter = (f"({capture_filter}) or (src host {connection['local']} and "
                 f"tcp src port {int(connection['local_port'])} and dst host {peer} and tcp dst port 8001)")
@@ -469,6 +476,8 @@ class Collector:
                         self.state.packet(observed_at)
                     key = (src, sport, dst, dport)
                     def request_gap():
+                        if getattr(self,'evidence_observer',None):
+                            self.evidence_observer.on_gap()
                         if self.source in ("pc", "dashen") and self.report_observer is not None:
                             self.report_observer.fail("请求观测中断，已暂停翻页")
                         if self.game_click_focus:

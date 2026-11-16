@@ -336,7 +336,7 @@ def make_handler(state, port, shutdown=None, stop_token=None, archive=None, harv
                         self._reply(evidence_reader.resume(payload.get("max_requests", 30),
                             continuous=payload.get("continuous", False), wait_for_ready=payload.get("wait_for_ready", False)))
                     else:
-                        self._reply(evidence_reader.enqueue(payload.get("battle_ids")))
+                        self._reply(evidence_reader.enqueue(payload.get("battle_ids"),verify_access=payload.get('verify_access',False)))
                     return
                 if self.path in backfill_paths:
                     if not report_backfill:
@@ -463,6 +463,7 @@ def main():
         read_bridge = ReadOnlyBridge()
     harvester = BattleHarvester(workspace, archive, read_bridge, read_ready)
     evidence_reader = ReportEvidenceReader(archive, read_bridge, read_ready)
+    collector.evidence_observer = evidence_reader
     collector.report_observer = harvester
     from union_relations import ClientUnionRelations
     union_sync = ClientUnionRelations(state,archive,backfill_connection)

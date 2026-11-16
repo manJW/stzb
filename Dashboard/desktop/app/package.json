@@ -1,7 +1,7 @@
 {
   "name": "stzb-battlefield-desktop",
   "productName": "率土战场",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "private": true,
   "main": "main.js",
   "description": "率土战场本机客户端"

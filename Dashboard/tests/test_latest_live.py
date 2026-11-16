@@ -133,9 +133,10 @@ class LatestLiveTests(unittest.TestCase):
             with self.archive.db:
                 self.archive.db.execute("UPDATE report_read_jobs SET priority=80 WHERE battle_id<>'1'")
             reader.resume(30, continuous=True)
-            for _ in range(6):
+            for _ in range(9):
                 reader.not_before = 0; reader._step()
-            self.assertEqual(saved,list(range(9,0,-1)))
+            self.assertEqual(saved[:6],[9,8,7,6,5,1])
+            self.assertEqual(sorted(saved),list(range(1,10)))
             self.assertEqual(self.archive.db.execute('SELECT COUNT(*) FROM battle_reports').fetchone()[0], 9)
             self.assertEqual(self.archive.db.execute('SELECT COUNT(*) FROM report_bodies').fetchone()[0],0)
         finally:

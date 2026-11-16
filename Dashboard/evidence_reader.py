@@ -4,7 +4,8 @@ import time
 import json
 
 from intelligence import MAIN_DETAIL_PRIORITY, report_references
-from observation_codec import map_troop_codes, report_troop_codes
+from observation_codec import map_troop_codes, report_troop_codes, dictionaries
+from report_access import rejection, request_ids
 
 URGENT_DETAIL_PRIORITY = 200
 
@@ -37,6 +38,9 @@ class ReportEvidenceReader:
         self.reason = "等待启用战报补全"
         self.focus_checked = (None, 0)
         self.focus_status = None
+        self.pending_read = None
+        self.server_errors = []
+        self.scope_check_at = 0
         with archive.lock, archive.db:
             archive.db.execute("UPDATE report_read_jobs SET state='queued' WHERE profile_id=? AND state IN ('reading','paused')", (self.profile_id,))
             archive.intelligence.seed_alliance_details()
@@ -52,11 +56,59 @@ class ReportEvidenceReader:
                 "selected_army": self.focus_status,"automatic_full_text":False,"detail_mode":"structured_fields",
                 "automatic_requests":{"profiles":self.profile_requests,"structured_details":self.structured_requests,"numeric_body":0},
                 "queue_reconciliation":dict(getattr(self.archive.intelligence,'detail_queue_reconciliation',{}))}
+            result['server_errors'] = list(self.server_errors[-12:])
         with self.archive.lock:
+            result['access'] = self.archive.intelligence.report_access.snapshot()
             result["jobs"] = [dict(r) for r in self.archive.db.execute('''SELECT kind,state,COUNT(*) AS count
                 FROM report_read_jobs WHERE profile_id=? GROUP BY kind,state''', (self.profile_id,))]
             result["alliance_reports"] = self.archive.intelligence.alliance_report_coverage()
         return result
+
+    def on_request(self, mid, value, observed_at):
+        if mid != 10:
+            return
+        ids = request_ids(value)
+        with self.lock:
+            pending = self.pending_read
+            if not pending or observed_at < pending['created_at']:
+                return
+            if ids == pending['ids']:
+                pending['wire_at'] = observed_at
+            elif pending['wire_at'] is not None:
+                pending['interleaved'] = True
+
+    def on_gap(self):
+        with self.lock:
+            if self.pending_read:
+                self.pending_read['interleaved'] = True
+
+    def on_message(self, mid, value, observed_at):
+        negative = rejection(value) if mid == 90002 else None
+        with self.lock:
+            pending = self.pending_read
+            correlated = bool(pending and pending['wire_at'] is not None and
+                observed_at >= pending['wire_at'] and not pending['interleaved'] and
+                pending['scope'] == self.archive.intelligence.report_access.scope)
+            if negative:
+                self.server_errors.append({'at':observed_at,'status':negative[0],'text':negative[1],
+                    'battle_ids':list(pending['ids']) if correlated else [],'correlated':correlated})
+                self.server_errors = self.server_errors[-40:]
+                if correlated and not pending['reply']:
+                    pending['negative'] = (*negative,observed_at)
+                    pending['wake'].set()
+            elif mid == 10 and pending:
+                if any(str(r.get('battle_id')) in pending['ids'] for r in dictionaries(value)):
+                    pending['reply'] = True
+                    pending['negative'] = None
+                    pending['wake'].set()
+
+    def scope_refresh_due(self):
+        if time.monotonic() < self.scope_check_at:
+            return False
+        self.scope_check_at = time.monotonic() + 15
+        with self.archive.lock:
+            return bool(self.archive.db.execute('''SELECT 1 FROM report_read_jobs WHERE profile_id=?
+                AND state='awaiting_scope' AND priority>=120 LIMIT 1''',(self.profile_id,)).fetchone())
 
     def resume(self, maximum=30, continuous=False, wait_for_ready=False):
         if type(maximum) is not int or not 1 <= maximum <= 200:
@@ -81,13 +133,19 @@ class ReportEvidenceReader:
             self.active, self.reason, self.continuous = False, reason, False
         return self.snapshot()
 
-    def enqueue(self, ids):
+    def enqueue(self, ids, verify_access=False):
         if not isinstance(ids, list) or not 1 <= len(ids) <= 100 or any(type(x) is not int for x in ids):
             raise ValueError("请选择1～100个已观测战报")
+        if type(verify_access) is not bool or (verify_access and len(ids)!=1):
+            raise ValueError('查询范围核对每次只允许一个已观测编号')
+        if verify_access and (self.ready() or self.archive.profile_id!=self.profile_id):
+            raise ValueError('当前角色和查询范围尚未核对，不执行单条诊断')
         # Validate the complete selection before adding any job.
         with self.archive.lock, self.archive.db:
             for bid in ids:
                 self.archive.intelligence.queue_evidence("detail", bid, retry=True)
+                if verify_access and not self._received('detail',bid):
+                    self.archive.intelligence.report_access.prepare_probe(bid)
         with self.lock:
             active = self.active
         if not active:
@@ -199,6 +257,8 @@ class ReportEvidenceReader:
                     WHERE profile_id=? AND state='failed' AND attempts<3 AND updated_at<?""",
                     (self.profile_id, time.time() - 300))
                 self.retry_at = time.monotonic() + 60
+            access = self.archive.intelligence.report_access
+            access.defer_unlisted()
             rows = self.archive.db.execute('''SELECT * FROM report_read_jobs WHERE profile_id=? AND state='queued'
                 AND (?=0 OR kind='detail') ORDER BY priority DESC,CASE kind WHEN 'profile' THEN 0 ELSE 1 END,
                 CAST(battle_id AS INTEGER) DESC,queued_at LIMIT 15''',
@@ -222,7 +282,9 @@ class ReportEvidenceReader:
                     self.pause("当前补全队列已处理完；新观测到的编号会继续入队")
                 return
             kind = rows[0]["kind"]
-            jobs = [r for r in rows if r["kind"] == kind][:15]
+            # The server's 90002 rejection names a command, not a report ID.
+            # One uncertain report per request makes a refusal attributable.
+            jobs = [r for r in rows if r["kind"] == kind][:1]
             if rows[0]['priority']>=URGENT_DETAIL_PRIORITY:
                 jobs=[r for r in jobs if r['priority']>=URGENT_DETAIL_PRIORITY]
             jobs = [r for r in jobs if not self._received(kind, r["battle_id"])]
@@ -234,6 +296,7 @@ class ReportEvidenceReader:
             for r in jobs:
                 self.archive.db.execute("UPDATE report_read_jobs SET state='reading',attempts=attempts+1,updated_at=? WHERE profile_id=? AND kind=? AND battle_id=?",
                     (time.time(), self.profile_id, kind, r["battle_id"]))
+            token = access.begin(jobs[0]['battle_id'],kind) if jobs else None
         if not jobs:
             return
         with self.lock:
@@ -242,6 +305,10 @@ class ReportEvidenceReader:
             if kind=='detail':self.structured_requests+=1
             else:self.profile_requests+=1
             self.waiting = True
+            pending = {'ids':[r['battle_id'] for r in jobs],'created_at':time.time(),
+                'wire_at':None,'interleaved':False,'scope':access.scope,
+                'negative':None,'reply':False,'wake':threading.Event()}
+            self.pending_read = pending
             if kind == 'detail':
                 self.priority_detail_reads = self.priority_detail_reads + 1 if jobs[0]['priority'] >= MAIN_DETAIL_PRIORITY else 0
         error = None
@@ -254,10 +321,13 @@ class ReportEvidenceReader:
                 with self.archive.lock:
                     if all(self._received(kind, r["battle_id"]) for r in jobs):
                         break
+                if pending['negative'] or pending['reply']:
+                    error = pending['negative'][1] if pending['negative'] else '已收到战报，部分队伍字段暂未提供'
+                    break
                 if time.monotonic() >= deadline:
                     error = "客户端未返回相应资料；可能无访问权限或记录已过期，未推断任何缺失数据"
                     break
-                self.closed.wait(.2)
+                pending['wake'].wait(.2)
         except Exception as exc:
             error = "读取未完成：" + str(exc)[:140]
         saved = 0
@@ -268,11 +338,20 @@ class ReportEvidenceReader:
                 state = "done" if received else "paused" if self.closed.is_set() else "failed"
                 self.archive.db.execute("UPDATE report_read_jobs SET state=?,last_error=?,updated_at=? WHERE profile_id=? AND kind=? AND battle_id=?",
                     (state, None if received else error, time.time(), self.profile_id, kind, r["battle_id"]))
+            if (not saved and pending['negative'] and access.scope == pending['scope']
+                    and self.archive.profile_id == self.profile_id):
+                status,text,at = pending['negative']
+                access.reject(jobs[0]['battle_id'],status,text,at)
+            outcome = 'received' if saved else pending['negative'][0] if pending['negative'] else 'partial' if pending['reply'] else 'timeout'
+            access.finish(token,outcome,pending['wire_at'],error)
         with self.lock:
+            self.pending_read = None
             self.waiting = False
             self.last_completed = time.monotonic()
             self.not_before = time.monotonic() + self.INTERVAL
-            self.failures = 0 if saved else self.failures + 1
+            self.failures = 0 if saved or pending['negative'] or pending['reply'] else self.failures + 1
+            if pending['negative']:
+                self.reason = '已停止当前账号不可读战报的自动重试；最新战报和其他队伍继续补采'
             if self.failures >= 2:
                 if kind == "profile":
                     self.profile_blocked, self.failures = True, 0
@@ -281,8 +360,7 @@ class ReportEvidenceReader:
                 else:
                     if self.continuous:
                         self.failures = 0
-                        self.not_before = time.monotonic() + 60
-                        self.reason = "部分队伍资料未返回，冷却60秒后继续其他已观测战报"
+                        self.reason = "未返回的单条任务已暂缓，继续最新战报和其他队伍资料"
                     else:
                         self.active, self.reason = False, "连续两次未获得队伍资料，已暂停补全；原始观测继续保留"
 

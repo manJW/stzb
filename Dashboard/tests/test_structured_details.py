@@ -74,6 +74,7 @@ class StructuredDetailTests(unittest.TestCase):
 
     def test_profile_reply_with_fields_finishes_without_an_extra_text_read(self):
         self.archive.ingest(5028,world(bid=1),200)
+        self.archive.intelligence.report_access.admit(1,200,'own_report_index')
         reader=ReportEvidenceReader(self.archive,self.bridge,lambda:None,False)
         try:
             reader.resume(3);reader._step();reader.not_before=0;reader._step()
