@@ -172,8 +172,9 @@ class Archive:
         territory_events.install(self)
         territory_events.seed_metrics(self)
         from attendance import Attendance
-        self.attendance = Attendance(self)
-        self.seed_player_traits()
+        with self.lock:
+            self.attendance = Attendance(self)
+            self.seed_player_traits()
 
     def _discard_system_npc_team(self, battle, side):
         owner = str(battle.get(side + '_role_id') or battle.get(side + '_name') or '')
